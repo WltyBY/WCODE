@@ -1,0 +1,10 @@
+channel_names:
+  "0": non_contrast_CT
+  "1": contrast_CT
+
+labels:
+  "background": 0
+  "GTVnd": 1
+  "GTVp": 2
+
+files_ending: .nii.gz

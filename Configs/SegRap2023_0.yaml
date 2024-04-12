@@ -1,0 +1,79 @@
+Network:
+  in_channels: 1
+  out_channels: 3
+  deep_supervision: False
+  need_features: False
+  features: [16, 32, 64, 128, 256, 512]
+  dropout_p: [0., 0., 0., 0.3, 0.4, 0.5]
+  num_conv_per_stage: [2, 2, 2, 2, 2, 2]
+  kernel_size: [[1, 3, 3], [1, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3], [3, 3, 3]]
+  pool_kernel_size: [[1, 2, 2], [1, 2, 2], [2, 2, 2], [2, 2, 2], [2, 2, 2]]
+  normalization: InstanceNorm
+  activate: leakyrelu
+
+Training_settings:
+  dataset_name: SegRap2023
+  modality: [0]
+  # to get the logs save folder's name easier to understand. If there is no content here, use time to name the folder
+  method_name: SegRap2023_0
+  # gpu or cpu used for training
+  device: {"gpu": [2]}
+  # fold can be set to 0, 1, 2, 3, 4
+  fold: 0
+  # maximum epoch number to train
+  epoch: 200
+  # iter number to train per epoch
+  tr_iterations_per_epoch: 300
+  # iter number to train per epoch
+  val_iterations_per_epoch: 50
+  # batch_size per gpu
+  batch_size: 2
+  # patch size of network input in z, y, x
+  patch_size: [40, 160, 288]
+  # settings of optimizer
+  base_lr: 0.01
+  weight_decay: 3.0e-5
+  # number of workers
+  num_processes: 8
+  # whether use deterministic training
+  deterministic: True
+  # random seed
+  seed: 1213
+  # the proportion of patches sampled from foreground voxels in each batch
+  oversample_rate: 0.33
+  probabilistic_oversampling: False
+  # ignore some classes when training
+  ignore_label: 
+  # path of model's weight to load. There can be no content here.
+  checkpoint: 
+
+Inferring_settings:
+  dataset_name: SegRap2023
+  # You must carefully provide the required modality
+  modality: [0]
+  # fold can be set to 0, 1, 2, 3, 4
+  fold: 0
+  split: val
+  # images' folder. If fold is None, infer all images in this folder.
+  original_img_folder: /media/x/Wlty/LymphNodes/Dataset/SegRap2023/images
+  # Save path of predictions
+  predictions_save_folder: /media/x/Wlty/LymphNodes/Predictions/SegRap2023/output_0_1
+  model_path: /media/x/Wlty/LymphNodes/Logs/SegRap2023/SegRap2023_0/fold_0/checkpoint_final.pth
+  # gpu or cpu used for training
+  device: {"gpu": [1]}
+  # whether to predict all the cases
+  overwrite: True
+  # save the soft labels and the files are ended with .npy
+  save_probabilities: False
+  # patch size of network input in z, y, x
+  patch_size: [40, 160, 288]
+  # step size of windows depend on patch size
+  tile_step_size: 0.5
+  # do gaussian importance filt
+  use_gaussian: True
+  perform_everything_on_gpu: True
+  # mirroring axes when inferring
+  use_mirroring: False
+  allowed_mirroring_axes: [0, 1, 2]
+  # number of workers
+  num_processes: 8
