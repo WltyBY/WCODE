@@ -1,4 +1,5 @@
 import os
+import csv
 import shutil
 import yaml
 import json
@@ -44,6 +45,12 @@ def save_pickle(data, save_path, mode="wb"):
         pickle.dump(data, f)
 
 
+def save_csv(list_of_lists, save_path, mode="a"):
+    with open(save_path, mode, encoding="utf-8", newline="") as f:
+        csv_writer = csv.writer(f)
+        csv_writer.writerows(list_of_lists)
+
+
 def save_itk(data, property, save_path):
     '''
     data is a np.ndarray: trans it to sitk obj and save.
@@ -76,7 +83,10 @@ def copy_file_to_dstFolder(srcfile, dstfolder):
         print("Copy %s -> %s" % (srcfile, dst_path))
 
 
-def check_workers_alive_and_busy(export_pool: Pool, worker_list: List, results_list: List, allowed_num_queued: int = 0):
+def check_workers_alive_and_busy(export_pool: Pool,
+                                 worker_list: List,
+                                 results_list: List,
+                                 allowed_num_queued: int = 0):
     """
 
     returns True if the number of results that are not ready is greater than the number of available workers + allowed_num_queued

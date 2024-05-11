@@ -35,7 +35,7 @@ def compute_new_shape(
 
 def resample_ND_data_to_given_spacing(data, origin_spacing, target_spacing, is_seg):
     """
-    Resample an image/seg array to a given spacing. z, y, x
+    Resample an image/seg array (z, y, x) to a given spacing. 
 
     :param data: The input image/seg array.
     :param origin_spacing: Original spacing along x, y, z direction.

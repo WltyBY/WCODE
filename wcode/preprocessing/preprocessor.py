@@ -1,10 +1,11 @@
 import os
 import multiprocessing
 import shutil
+import random
 import numpy as np
 
 from time import sleep
-from typing import Union, Tuple, List
+from typing import Union, List
 from tqdm import tqdm
 
 from wcode.preprocessing.cropping import crop_to_mask
@@ -13,8 +14,11 @@ from wcode.preprocessing.resampling import (
     resample_npy_with_channels_on_spacing,
     compute_new_shape,
 )
-from wcode.utils.file_operations import open_yaml, save_pickle, open_json, save_json
-from wcode.utils.data_io import read_sitk_case, create_lists_from_splitted_dataset_folder
+from wcode.utils.file_operations import open_yaml, save_pickle, open_json
+from wcode.utils.data_io import (
+    read_sitk_case,
+    create_lists_from_splitted_dataset_folder,
+)
 
 
 class Preprocessor(object):
@@ -54,7 +58,7 @@ class Preprocessor(object):
 
         # crop
         shape_before_cropping = data.shape[1:]
-        data, seg, bbox = crop_to_mask(data, seg)
+        data, seg, bbox = crop_to_mask(data, seg, {"threshold": 0})
         properties["shape_before_cropping"] = shape_before_cropping
         properties["bbox_used_for_cropping"] = bbox
         properties["shape_after_cropping_and_before_resampling"] = data.shape[1:]
@@ -121,9 +125,9 @@ class Preprocessor(object):
         image_files: List[str],
         seg_file: str,
     ):
-        data, seg, properties = self.run_case(image_files, seg_file)
+        data, seg, properties = self.run_case(image_files, seg_file)        
+        properties["oversample"] = self._sample_foreground_locations(seg, output_filename_truncated)
 
-        # print('dtypes', data.dtype, seg.dtype)
         np.savez(output_filename_truncated + ".npz", data=data, seg=seg)
         save_pickle(properties, output_filename_truncated + ".pkl")
 
@@ -150,6 +154,35 @@ class Preprocessor(object):
 
         return data
 
+    @staticmethod
+    def _sample_foreground_locations(
+        seg: np.ndarray, name, num_samples=10000, seed: int = 319
+    ):
+        # seg in (c, z, y, x)
+        # At least 1% of the class voxels need to be selected, otherwise it may be too
+        # sparse
+        min_percent_coverage = 0.01
+
+        all_locs = np.argwhere(seg[0] != 0)
+        target_num_samples = min(num_samples, len(all_locs))
+        target_num_samples = max(
+            target_num_samples, int(np.ceil(len(all_locs) * min_percent_coverage))
+        )
+
+        # Perhaps this can accelerate the sampling process?
+        # When the number of elements increases, the time consumption of np.random.choice remains unchanged,
+        # while the time cost increases using random.sample.
+        if target_num_samples / len(all_locs) > 0.1:
+            rndst = np.random.RandomState(seed)
+            selected = all_locs[
+                rndst.choice(len(all_locs), target_num_samples, replace=False)
+            ]
+        else:
+            random.seed(seed)
+            selected = all_locs[random.sample(range(len(all_locs)), target_num_samples)]
+
+        return selected
+
     def run(
         self,
         num_processes: int = 8,
@@ -175,7 +208,10 @@ class Preprocessor(object):
             "Expected plans file (%s) not found. Do dataset analysis first."
             % data_split_json
         )
-        identifiers = open_json(data_split_json)
+        data_split_dict = open_json(data_split_json)
+        identifiers = (
+            data_split_dict["fold0"]["train"] + data_split_dict["fold0"]["val"]
+        )
 
         files_ending = self.dataset_yaml["files_ending"]
 
@@ -188,8 +224,7 @@ class Preprocessor(object):
         os.makedirs(output_directory, exist_ok=True)
 
         output_filenames_truncated = [
-            os.path.join(output_directory, i)
-            for i in identifiers["fold0"]["train"] + identifiers["fold0"]["val"]
+            os.path.join(output_directory, i) for i in identifiers
         ]
 
         folder_lst = [
@@ -203,7 +238,7 @@ class Preprocessor(object):
             image_fnames = create_lists_from_splitted_dataset_folder(
                 os.path.join("./Dataset", self.dataset_name, "images"),
                 files_ending,
-                identifiers["fold0"]["train"] + identifiers["fold0"]["val"],
+                identifiers,
             )
             # list of segmentation filenames
             seg_fnames = [
@@ -212,18 +247,18 @@ class Preprocessor(object):
                         "./Dataset", self.dataset_name, "labels", i + files_ending
                     )
                 ]
-                for i in identifiers["fold0"]["train"] + identifiers["fold0"]["val"]
+                for i in identifiers
             ]
         elif {"imagesTr", "labelsTr", "imagesVal", "labelsVal"}.issubset(folder_lst):
             image_fnames_train = create_lists_from_splitted_dataset_folder(
                 os.path.join("./Dataset", self.dataset_name, "imagesTr"),
                 files_ending,
-                identifiers["fold0"]["train"],
+                data_split_dict["fold0"]["train"],
             )
             image_fnames_val = create_lists_from_splitted_dataset_folder(
                 os.path.join("./Dataset", self.dataset_name, "imagesVal"),
                 files_ending,
-                identifiers["fold0"]["val"],
+                data_split_dict["fold0"]["val"],
             )
             seg_fnames_train = [
                 [
@@ -231,7 +266,7 @@ class Preprocessor(object):
                         "./Dataset", self.dataset_name, "labelsTr", i + files_ending
                     )
                 ]
-                for i in identifiers["fold0"]["train"]
+                for i in data_split_dict["fold0"]["train"]
             ]
             seg_fnames_val = [
                 [
@@ -239,7 +274,7 @@ class Preprocessor(object):
                         "./Dataset", self.dataset_name, "labelsVal", i + files_ending
                     )
                 ]
-                for i in identifiers["fold0"]["val"]
+                for i in data_split_dict["fold0"]["val"]
             ]
             image_fnames = image_fnames_train + image_fnames_val
             seg_fnames = seg_fnames_train + seg_fnames_val
@@ -272,8 +307,3 @@ class Preprocessor(object):
                         pbar.update()
                     remaining = [i for i in remaining if i not in done]
                     sleep(0.1)
-
-
-if __name__ == "__main__":
-    pp = Preprocessor("RADCURE")
-    pp.run(4)

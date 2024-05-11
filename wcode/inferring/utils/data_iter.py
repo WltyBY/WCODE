@@ -4,7 +4,7 @@ import queue
 import multiprocessing
 
 from time import sleep
-from torch.multiprocessing import Event, Process, Queue, Manager
+from torch.multiprocessing import Event, Queue, Manager
 
 from wcode.preprocessing.preprocessor import Preprocessor
 

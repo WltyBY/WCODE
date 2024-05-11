@@ -1,6 +1,5 @@
 import torch
 import torch.nn.functional as F
-import numpy as np
 
 from wcode.training.Patchsampler import Patchsampler
 
@@ -37,15 +36,19 @@ class PatchBasedCollater(object):
 
         image_lst = []
         label_lst = []
+        oversample_lst = []
         for i in range(batch_size):
-            # add one more batchsize channel using para[None]
             image_lst.append(data[i]["image"])
             label_lst.append(data[i]["label"])
+            oversample_lst.append(data[i]["property"]["oversample"])
 
         # sample patch
         # image: (b, c, patchsize), label: (b, 1, patchsize)
-        image, label = self.Patchsampler.run(image_lst, label_lst)
+        # start = time.time()
+        image, label = self.Patchsampler.run(image_lst, label_lst, oversample_lst)
+        # print("Patch Sample: {}s".format(time.time() - start))
 
+        # start = time.time()
         # do transform
         # in monai, most of the pre-/post-processing transforms expect: (num_channels, spatial_dim_1[, spatial_dim_2, ...]),
         for i in range(batch_size):
@@ -62,6 +65,7 @@ class PatchBasedCollater(object):
         # are Tensors after transform.
         output_dict["image"] = torch.vstack(output_dict["image"])
         output_dict["label"] = torch.vstack(output_dict["label"])
+        # print("Augmentation: {}s".format(time.time() - start))
 
         # generate deep supervision labels
         axes = list(range(2, len(output_dict["label"].shape)))

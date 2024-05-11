@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+
 from wcode.utils.file_operations import open_json
 
 if __name__ == "__main__":

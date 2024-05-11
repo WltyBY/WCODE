@@ -9,7 +9,7 @@ from typing import List, Tuple
 from wcode.preprocessing.cropping import crop_to_mask
 from wcode.preprocessing.resampling import get_lowres_axis, whether_anisotropy
 from wcode.preprocessing.normalizing import find_normalizer
-from wcode.utils.file_operations import open_yaml, save_yaml, open_json, save_json
+from wcode.utils.file_operations import open_yaml, open_json, save_json
 from wcode.utils.data_io import get_all_img_and_label_path, read_sitk_case
 from wcode.utils.dataset_split import dataset_split
 
@@ -18,7 +18,8 @@ class DatasetFingerprintExtractor(object):
     def __init__(
         self,
         dataset_name,
-        split_rate: List[int] = [7, 1, 2],
+        five_fold: bool,
+        split_rate: list = [7, 1, 2],
         verbose: bool = False,
     ):
         # if False, show progress bar
@@ -36,10 +37,13 @@ class DatasetFingerprintExtractor(object):
         )
 
         if self.whehter_need_to_split:
-            self.train_and_val_set, self.fold_cases_dict = dataset_split(
-                list(self.dataset.keys()), split_rate=split_rate
+            (
+                self.train_and_val_set,
+                self.fold_cases_dict,
+                self.fold_cases_dict["all_fold_is_the_same"],
+            ) = dataset_split(
+                list(self.dataset.keys()), five_fold=five_fold, split_rate=split_rate
             )
-            self.fold_cases_dict["all_fold_is_the_same"] = False
         else:
             self.train_and_val_set = list(self.dataset["train"].keys()) + list(
                 self.dataset["val"].keys()
@@ -152,7 +156,7 @@ class DatasetFingerprintExtractor(object):
         )
 
     @staticmethod
-    def find_target_spacing(spacings):
+    def find_target_spacing(spacings: list):
         anisotropy_flag = False
         dim = len(spacings[0])
         spacings_array = np.array(spacings)
@@ -182,28 +186,51 @@ class DatasetFingerprintExtractor(object):
 
         return target_spacing
 
+    @staticmethod
+    def get_median_shape(shapes_after_crop: list, spacings: list, target_spacing):
+        dim = len(shapes_after_crop[0])
+        shapes_after_resample = []
+        if dim == 3:
+            for i in range(len(shapes_after_crop)):
+                origin_spacing = spacings[i]
+                zoom = [origin_spacing[j] / target_spacing[j] for j in range(dim)]
+                zoom = np.array([zoom[2], zoom[1], zoom[0]])
+                shapes_after_resample.append(np.array(shapes_after_crop[i]) * zoom)
+        else:
+            raise Exception("We can only process 3D data here.")
+        
+        median_shape = [np.nan for _ in range(dim)]
+        shapes_after_resample_array = np.array(shapes_after_resample)
+        for axis in range(dim):
+            median_shape[axis] = int(np.round(np.median(shapes_after_resample_array[:, axis])))
+
+        if True in np.isnan(median_shape):
+            raise Exception("There is Nan in median_shape during calculating.")
+
+        return median_shape
+
     def save_dataset_split_json(self, save_path):
         output = {}
         for i in range(5):
             fold = "fold" + str(i)
             output[fold] = {}
             output[fold]["train"] = [
-                "{}-{}".format(self.dataset_name, case)
+                "{}_{}".format(self.dataset_name, case)
                 for case in self.fold_cases_dict[fold]["train"]
             ]
             output[fold]["train"].sort()
 
             output[fold]["val"] = [
-                "{}-{}".format(self.dataset_name, case)
+                "{}_{}".format(self.dataset_name, case)
                 for case in self.fold_cases_dict[fold]["val"]
             ]
             output[fold]["val"].sort()
 
-        output["test"] = [
-            "{}-{}".format(self.dataset_name, case)
-            for case in self.fold_cases_dict["test"]
-        ]
-        if output["test"]:
+        if output.__contains__("test"):
+            output["test"] = [
+                "{}_{}".format(self.dataset_name, case)
+                for case in self.fold_cases_dict["test"]
+            ]
             output["test"].sort()
 
         output["all_fold_is_the_same"] = self.fold_cases_dict["all_fold_is_the_same"]
@@ -317,19 +344,19 @@ class DatasetFingerprintExtractor(object):
                 else self.dataset_json["modality"].keys()
             )
             intensity_statistics_per_channel = {}
+            percentiles = np.array((0.5, 50.0, 99.5))
             for i in range(num_channels):
+                percentile_00_5, median, percentile_99_5 = np.percentile(
+                    foreground_intensities_per_channel[i], percentiles
+                )
                 intensity_statistics_per_channel[i] = {
                     "mean": float(np.mean(foreground_intensities_per_channel[i])),
-                    "median": float(np.median(foreground_intensities_per_channel[i])),
+                    "median": float(median),
                     "std": float(np.std(foreground_intensities_per_channel[i])),
                     "min": float(np.min(foreground_intensities_per_channel[i])),
                     "max": float(np.max(foreground_intensities_per_channel[i])),
-                    "percentile_99_5": float(
-                        np.percentile(foreground_intensities_per_channel[i], 99.5)
-                    ),
-                    "percentile_00_5": float(
-                        np.percentile(foreground_intensities_per_channel[i], 0.5)
-                    ),
+                    "percentile_99_5": float(percentile_99_5),
+                    "percentile_00_5": float(percentile_00_5),
                 }
 
             fingerprint = {
@@ -342,8 +369,13 @@ class DatasetFingerprintExtractor(object):
             normalization_schemes, use_nonzero_mask_for_norm = (
                 self.determine_normalization_scheme_and_whether_mask_is_used_for_norm()
             )
+
+            target_spacing = self.find_target_spacing(spacings)
             plans = {
-                "target_spacing": self.find_target_spacing(spacings),
+                "target_spacing": target_spacing,
+                "median_shape": self.get_median_shape(
+                    shapes_after_crop, spacings, target_spacing
+                ),
                 "normalization_schemes": normalization_schemes,
                 "use_mask_for_norm": use_nonzero_mask_for_norm,
             }

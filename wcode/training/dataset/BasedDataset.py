@@ -63,6 +63,7 @@ class BasedDataset(Dataset):
         if self.modality is None or self.modality == "all":
             sample = {"image": data_dict["data"], "label": data_dict["seg"]}
         else:
+            assert isinstance(self.modality, list)
             sample = {"image": data_dict["data"][self.modality], "label": data_dict["seg"]}
 
         sample["idx"] = case

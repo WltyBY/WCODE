@@ -17,7 +17,7 @@ class Patchsampler(object):
         ), "oversample_foreground_percent should be in [0, 1]."
         self.probabilistic_oversampling = probabilistic_oversampling
 
-    def run(self, image_lst, label_lst):
+    def run(self, image_lst, label_lst, oversample_fg_candidate):
         """
         Oversampler processes data from dataloader,
         so the element of image_lst and label_lst is in (c, (z,) y, x)
@@ -34,7 +34,7 @@ class Patchsampler(object):
             for i in range(batch_size):
                 if random.random() <= self.oversample_foreground_percent:
                     # do oversample
-                    image_patch, label_patch = self._oversample(image_lst[i], label_lst[i])
+                    image_patch, label_patch = self._oversample(image_lst[i], label_lst[i], oversample_fg_candidate[i])
                 else:
                     image_patch, label_patch = self._normal_sample(image_lst[i], label_lst[i])
                 image_sampled.append(image_patch[None])
@@ -49,7 +49,7 @@ class Patchsampler(object):
             for i in range(batch_size):
                 if i in sampled_idx:
                     # do oversample
-                    image_patch, label_patch = self._oversample(image_lst[i], label_lst[i])
+                    image_patch, label_patch = self._oversample(image_lst[i], label_lst[i], oversample_fg_candidate[i])
                 elif i in remain_idx:
                     image_patch, label_patch = self._normal_sample(image_lst[i], label_lst[i])
                 else:
@@ -59,7 +59,7 @@ class Patchsampler(object):
 
         return np.vstack(image_sampled), np.vstack(label_sampled)
 
-    def _oversample(self, image, label):
+    def _oversample(self, image, label, oversample_fg_candidate):
         # image and label in (c, (z,) y, x)
         shape = np.array(image.shape[1:])
         dim = len(self.half_patch_size)
@@ -73,23 +73,22 @@ class Patchsampler(object):
         )
 
         # get the foreground voxels' index
-        fg_index = zip(*np.where(label[0] > 0))
+        # fg_index = zip(*np.where(label[0] > 0))
         candidate_fg_index = [
-            fg
-            for fg in fg_index
-            if fg < tuple(index_range_up) and fg > tuple(index_range_low)
+            tuple(fg)
+            for fg in oversample_fg_candidate
+            if tuple(fg) < tuple(index_range_up) and tuple(fg) > tuple(index_range_low)
         ]
         sampled_voxel = random.sample(candidate_fg_index, 1)
 
         bbox_lbs = np.array(sampled_voxel)[0] - self.half_patch_size
         bbox_ubs = bbox_lbs + self.patch_size
-        # print(sampled_voxel, bbox_lbs, bbox_ubs)
+
         # bbmin whether smaller than the lowest index of image
         underflow_flag = [0 > bbox_lbs[i] for i in range(dim)]
         # bbmax whether larger than the highest index of image
         overflow_flag = [shape[i] < bbox_ubs[i] for i in range(dim)]
         # True in it means the direction of this axis need to pad
-        # print(underflow_flag, overflow_flag)
 
         if np.any(underflow_flag + overflow_flag):
             valid_bbmin = [max(0, bbox_lbs[i]) for i in range(dim)]

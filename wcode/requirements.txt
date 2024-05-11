@@ -1,0 +1,10 @@
+acvl_utils
+matplotlib
+monai
+numpy
+PyYAML
+scipy
+seaborn
+SimpleITK
+torch
+tqdm

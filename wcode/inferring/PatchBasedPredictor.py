@@ -6,7 +6,7 @@ import numpy as np
 
 from tqdm import tqdm
 from time import sleep
-from typing import Tuple, Union, List, Optional
+from typing import Tuple, Union, List
 
 from wcode.net.VNet import VNet
 from wcode.preprocessing.preprocessor import Preprocessor
@@ -30,10 +30,15 @@ from wcode.inferring.utils.data_iter import preprocessing_iterator_fromfiles
 
 
 class PatchBasedPredictor(object):
-
-    def __init__(self, config_file_path, allow_tqdm, verbose=False):
-        self.config_dict = open_yaml(config_file_path)
+    def __init__(self, config_file_path_or_dict, allow_tqdm, verbose=False):
+        if isinstance(config_file_path_or_dict, str):
+            self.config_dict = open_yaml(config_file_path_or_dict)
+        else:
+            assert isinstance(config_file_path_or_dict, dict)
+            self.config_dict = config_file_path_or_dict
+            
         self.get_inferring_settings(self.config_dict["Inferring_settings"])
+        
         self.device = self.get_device()
         self.allow_tqdm = allow_tqdm
         self.verbose = verbose
@@ -73,8 +78,14 @@ class PatchBasedPredictor(object):
         assert len(self.device_dict.keys()) == 1, "Device can only be GPU or CPU"
 
         if "gpu" in self.device_dict.keys():
+            os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(
+                str(i) for i in self.device_dict["gpu"]
+            )
+            # If os.environ['CUDA_VISIBLE_DEVICES'] are not used, some process with the same PID will run on another CUDA device.
+            # For example, I have a device with 4 GPU. When I run on GPU0, there would be a process with the same PID on maybe GPU1 (a little gpu memory usage).
+            # When use os.environ['CUDA_VISIBLE_DEVICES'] with just one GPU device, the device in torch must set to "cuda:0".
             if len(self.device_dict["gpu"]) == 1:
-                device = torch.device(type="cuda", index=self.device_dict["gpu"][0])
+                device = torch.device(type="cuda", index=0)
             else:
                 raise Exception("The number of gpu should >= 1.")
         elif "cpu" in self.device_dict.keys():
@@ -562,7 +573,10 @@ class PatchBasedPredictor(object):
                     print(f"done with {os.path.basename(ofile)}")
                 else:
                     print(f"\nDone with image of shape {data.shape}:")
-            ret = [i.get() for i in r]
+            if ofile is not None:
+                ret = [i.get() for i in r]
+            else:
+                ret = [i.get()[0] for i in r]
 
         # clear lru cache
         compute_gaussian.cache_clear()
@@ -572,9 +586,15 @@ class PatchBasedPredictor(object):
         return ret
 
     def predict_from_file(
-        self, source_img_folder, output_img_folder, modality, save_or_return_probabilities=False
+        self,
+        source_img_folder,
+        output_img_folder,
+        modality,
+        save_or_return_probabilities=False,
     ):
-        images_dict = self.get_images_dict(source_img_folder, modality, output_img_folder)
+        images_dict = self.get_images_dict(
+            source_img_folder, modality, output_img_folder
+        )
         if len(images_dict) == 0:
             return
 
@@ -586,7 +606,7 @@ class PatchBasedPredictor(object):
 
 
 if __name__ == "__main__":
-    setting_file_name = "SegRap2023.yaml"
+    setting_file_name = "SegRap2023_1.yaml"
     settings_path = os.path.join("./Configs", setting_file_name)
     predictor = PatchBasedPredictor(settings_path, allow_tqdm=True, verbose=False)
     print(predictor.get_images_dict(predictor.original_img_folder, predictor.modality))

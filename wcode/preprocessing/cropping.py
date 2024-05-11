@@ -84,8 +84,8 @@ def create_mask_base_on_threshold(data, threshold=None):
     return mask
 
 
-def crop_to_mask(data, seg=None, create_mask=create_mask_base_on_threshold):
-    data_nonzero_mask = create_mask(data)
+def crop_to_mask(data, seg=None, crop_fun_args={}, create_mask=create_mask_base_on_threshold):
+    data_nonzero_mask = create_mask(data, *crop_fun_args)
     data_bbmin, data_bbmax = get_ND_bounding_box(data_nonzero_mask)
 
     if seg is not None:
@@ -118,4 +118,4 @@ def crop_to_mask(data, seg=None, create_mask=create_mask_base_on_threshold):
             )
         data_cropped = np.vstack(data_cropped_lst)
 
-        return data_cropped, np.zeros_like(data_cropped), [data_bbmin, data_bbmax]
+        return data_cropped, np.zeros_like(data_cropped[0])[None], [data_bbmin, data_bbmax]

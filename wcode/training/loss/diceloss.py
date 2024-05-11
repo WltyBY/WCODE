@@ -1,6 +1,8 @@
 import torch
+
 from torch import nn
-from nnunetv2.utilities.ddp_allgather import AllGatherGrad
+
+from wcode.utils.Tensor_operations import AllGatherGrad
 
 
 class TverskyLoss(nn.Module):

@@ -1,6 +1,5 @@
 import os
 import re
-import nibabel
 import SimpleITK as sitk
 import numpy as np
 
@@ -29,12 +28,12 @@ def get_all_img_and_label_path(dataset_name, files_ending):
 
         output_dict = dict()
         for img in images_name_lst:
-            case_id = img.split("-")[1].split("_")[0]
+            case_id = img.split("_")[1]
             if case_id not in output_dict.keys():
                 output_dict[case_id] = {}
                 output_dict[case_id]["image"] = []
                 output_dict[case_id]["label"] = False
-            label = "{}-{}{}".format(dataset_name, case_id, files_ending)
+            label = "{}_{}{}".format(dataset_name, case_id, files_ending)
 
             output_dict[case_id]["image"].append(os.path.join(images_folder, img))
             if not output_dict[case_id]["label"]:
@@ -42,6 +41,7 @@ def get_all_img_and_label_path(dataset_name, files_ending):
         whehter_need_to_split = True
 
         return output_dict, whehter_need_to_split
+    
     elif {"imagesTr", "labelsTr", "imagesVal", "labelsVal"}.issubset(folder_lst):
         train_images_folder = os.path.join(dataset_folder_path, "imagesTr")
         train_images_name_lst = [
@@ -113,7 +113,7 @@ def get_all_img_and_label_path(dataset_name, files_ending):
                     output_dict[dataset_class][case_id] = {}
                     output_dict[dataset_class][case_id]["image"] = []
 
-                label = "{}-{}{}".format(dataset_name, case_id, files_ending)
+                label = "{}_{}{}".format(dataset_name, case_id, files_ending)
 
                 output_dict[dataset_class][case_id]["image"].append(
                     os.path.join(names_dict[dataset_class]["images"][0], img)
