@@ -1,39 +1,28 @@
-import torch
 import numpy as np
 
 from scipy import ndimage
+from typing import Union, Tuple
 
-from wcode.utils.Tensor_operations import sum_tensor
-
-def compute_tp_fp_fn_tn(pred, target, num_classes):
-    shp_x = pred.shape
-    shp_y = target.shape
-
-    assert len(shp_x) == len(shp_y), "dim of pred and gt should be the same."
-    
-    # trans to one-hot vector
-    pred = torch.Tensor(pred).long()
-    pred_onehot = torch.zeros([num_classes] + list(shp_x))
-    pred_onehot.scatter_(0, pred[None], 1)
-
-    target = torch.Tensor(target).long()
-    gt_onehot = torch.zeros([num_classes] + list(shp_y))
-    gt_onehot.scatter_(0, target[None], 1)
-
-    tp = pred_onehot * gt_onehot
-    fp = pred_onehot * (1 - gt_onehot)
-    fn = (1 - pred_onehot) * gt_onehot
-    tn = (1 - pred_onehot) * (1 - gt_onehot)
-
-    axes = tuple(range(1, len(pred.size()) + 1))
-
-    if len(axes) > 0:
-        tp = sum_tensor(tp, axes, keepdim=False)
-        fp = sum_tensor(fp, axes, keepdim=False)
-        fn = sum_tensor(fn, axes, keepdim=False)
-        tn = sum_tensor(tn, axes, keepdim=False)
-
+def compute_tp_fp_fn_tn(pred, target, ignore_mask=None):
+    if ignore_mask is None:
+        use_mask = np.ones_like(target, dtype=bool)
+    else:
+        use_mask = ~ignore_mask
+    tp = np.sum((target & pred) & use_mask)
+    fp = np.sum(((~target) & pred) & use_mask)
+    fn = np.sum((target & (~pred)) & use_mask)
+    tn = np.sum(((~target) & (~pred)) & use_mask)
     return tp, fp, fn, tn
+
+
+def region_or_label_to_mask(segmentation: np.ndarray, region_or_label: Union[int, Tuple[int, ...]]) -> np.ndarray:
+    if np.isscalar(region_or_label):
+        return segmentation == region_or_label
+    else:
+        mask = np.zeros_like(segmentation, dtype=bool)
+        for r in region_or_label:
+            mask[segmentation == r] = True
+    return mask
 
 
 def DSC(pred, target, axes=None, smooth=1e-5):

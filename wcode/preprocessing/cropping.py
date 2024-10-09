@@ -8,14 +8,14 @@ from wcode.utils.NDarray_operations import (
 )
 
 
-def get_human_region_mask_one_channel(img):
+def get_human_region_mask_one_channel(img, threshold=-600):
     """
     Get the mask of human region in CT volumes
     """
     dim = len(img.shape)
     if dim == 4:
         img = img[0]
-    mask = np.asarray(img > -600)
+    mask = np.asarray(img > threshold)
     se = np.ones([3, 3, 3])
     mask = ndimage.binary_opening(mask, se, iterations=2)
     mask = get_largest_k_components(mask, 1)
@@ -90,7 +90,11 @@ def crop_to_mask(data, seg=None, crop_fun_args={}, create_mask=create_mask_base_
 
     if seg is not None:
         seg_nonzero_mask = create_mask_base_on_threshold(seg, threshold=0)
-        seg_bbmin, seg_bbmax = get_ND_bounding_box(seg_nonzero_mask)
+        if not(np.any(seg_nonzero_mask)):
+            # all zero in seg_nonzero_mask
+            seg_bbmin, seg_bbmax = data_bbmin, data_bbmax
+        else:
+            seg_bbmin, seg_bbmax = get_ND_bounding_box(seg_nonzero_mask)
 
         bbmin, bbmax = [], []
         for i in range(len(data_bbmin)):
@@ -103,9 +107,15 @@ def crop_to_mask(data, seg=None, crop_fun_args={}, create_mask=create_mask_base_
                 crop_ND_volume_with_bounding_box(data[i], bbmin, bbmax)[None]
             )
         data_cropped = np.vstack(data_cropped_lst)
-        seg_cropped = crop_ND_volume_with_bounding_box(seg[0], bbmin, bbmax)
+        
+        seg_cropped_lst = []
+        for i in range(seg.shape[0]):
+            seg_cropped_lst.append(
+                crop_ND_volume_with_bounding_box(seg[i], bbmin, bbmax)[None]
+            )
+        seg_cropped = np.vstack(seg_cropped_lst)
 
-        return data_cropped, seg_cropped[None], [bbmin, bbmax]
+        return data_cropped, seg_cropped, [bbmin, bbmax]
     else:
         assert len(data_bbmin) == len(
             data_bbmax

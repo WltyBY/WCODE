@@ -27,6 +27,7 @@ def get_ND_bounding_box(volume, margin=None):
     for i in range(len(input_shape)):
         bb_min[i] = max(bb_min[i] - margin[i], 0)
         bb_max[i] = min(bb_max[i] + margin[i], input_shape[i])
+    
     return bb_min, bb_max
 
 
@@ -92,3 +93,27 @@ def get_largest_k_components(image, k=1):
         output_i = np.asarray(labeled_array == labeli, np.uint8)
         output.append(output_i)
     return output[0] if k == 1 else output
+
+
+def create_h_component_image(image):
+    """
+    Get the H-component image for nuclei image.
+    :param image: The input ND array for nuclei image, channel in RGB.
+    :return: An output array of H-component image.
+    """
+    # define stain_matrix
+    H = np.array([0.650, 0.704, 0.286])
+    E = np.array([0.072, 0.990, 0.105])
+    R = np.array([0.268, 0.570, 0.776])
+    HDABtoRGB = [(H/np.linalg.norm(H)).tolist(), (E/np.linalg.norm(E)).tolist(), (R/np.linalg.norm(R)).tolist()]
+    stain_matrix = HDABtoRGB
+    im_inv = np.linalg.inv(stain_matrix)
+        
+    # transform 
+    im_temp = (-255)*np.log((np.float64(image)+1)/255)/np.log(255)
+    image_out = np.reshape(np.dot(np.reshape(im_temp, [-1,3]), im_inv), np.shape(image))
+    image_out = np.exp((255-image_out)*np.log(255)/255)
+    image_out[image_out > 255] = 255
+    image_h = image_out[:, :, 0].astype(np.uint8)
+
+    return image_h

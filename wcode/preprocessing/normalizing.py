@@ -71,16 +71,48 @@ class ZScoreNormalization(ImageNormalization):
             std = image.std()
             image = (image - mean) / (max(std, 1e-8))
         return image
+    
+
+class GeneralNormalization(ImageNormalization):
+    leaves_pixels_outside_mask_at_zero_if_use_mask_for_norm_is_true = False
+
+    def run(self, image: np.ndarray, seg: np.ndarray = None) -> np.ndarray:
+        """
+        here seg is used to store the zero valued region. The value for that region in the segmentation is -1 by
+        default.
+        """
+        image = image.astype(self.target_dtype)
+        mean = image.mean()
+        std = image.std()
+        image = (image - mean) / (max(std, 1e-8))
+        return image
+    
+
+class NoNormalization(ImageNormalization):
+    leaves_pixels_outside_mask_at_zero_if_use_mask_for_norm_is_true = False
+
+    def run(self, image: np.ndarray, seg: np.ndarray = None) -> np.ndarray:
+        return image.astype(self.target_dtype, copy=False)
 
 
 channel_name_to_normalization_mapping = {
-    'CT': CTNormalization
+    'CT': CTNormalization,
+    'label': NoNormalization
+}
+
+normalization_schemes_to_object = {
+    CTNormalization.__name__: CTNormalization,
+    ZScoreNormalization.__name__: ZScoreNormalization,
+    GeneralNormalization.__name__: GeneralNormalization,
+    NoNormalization.__name__: NoNormalization,
 }
 
 
 def find_normalizer(scheme):
     if "CT" in scheme:
         scheme = "CT"
+    elif any(True if s in scheme else False for s in ["mask", "label", "seg"]):
+        scheme = "label"
     norm_scheme = channel_name_to_normalization_mapping.get(scheme)
     if norm_scheme is None:
         norm_scheme = ZScoreNormalization

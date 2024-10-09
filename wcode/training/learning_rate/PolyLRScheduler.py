@@ -16,7 +16,7 @@ class PolyLRScheduler(_LRScheduler):
         self.exponent = exponent
         self.ctr = 0
         super().__init__(
-            optimizer, current_step if current_step is not None else -1, False
+            optimizer, current_step if current_step is not None else -1
         )
 
     def step(self, current_step=None):

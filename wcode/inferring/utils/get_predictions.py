@@ -103,7 +103,7 @@ def convert_predicted_logits_to_segmentation_with_correct_shape(
             else predicted_logits.astype("float32")
         ),
         properties_dict["shape_after_cropping_and_before_resampling"],
-        is_seg=False,
+        is_seg=True,
     )
     # return value of resampling_fn_probabilities can be ndarray or Tensor but that doesnt matter because
     # apply_inference_nonlin will covnert to torch

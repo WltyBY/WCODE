@@ -20,7 +20,7 @@ def module_generate(dim, normalization):
             raise Exception()
 
 
-# weight blocks
+######################### blocks for CNN #########################
 class ConvBlock(nn.Module):
     def __init__(
         self,

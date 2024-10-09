@@ -1,16 +1,17 @@
 import torch
 from torch import nn
 
-from wcode.net.baseblock import ResidualBlock, module_generate, ConvBlock
-from wcode.net.pooling import ConvDownPool, ConvUpPool
+from wcode.net.CNN.baseblock_CNN import ResidualBlock, ConvBlock
+from wcode.net.CNN.pooling import ConvDownPool, ConvUpPool
 from wcode.net.activate_function import ACTIVATE_LAYER
-from typing import List
+
 
 class DownBlock(nn.Module):
     def __init__(
         self,
         in_channels,
-        out_channels,
+        conv_out_channels,
+        pool_out_channels,
         dropout_p,
         num_conv,
         kernel_size,
@@ -22,7 +23,7 @@ class DownBlock(nn.Module):
 
         self.conv = ResidualBlock(
             in_channels=in_channels,
-            out_channels=out_channels,
+            out_channels=conv_out_channels,
             dropout_p=dropout_p,
             dim=len(kernel_size),
             num_conv=num_conv,
@@ -32,7 +33,8 @@ class DownBlock(nn.Module):
             activate=activate,
         )
         self.downpool = ConvDownPool(
-            in_channels=out_channels,
+            in_channels=conv_out_channels,
+            out_channels=pool_out_channels,
             dim=len(kernel_size),
             pool_kernel_size=down_scale_factor,
             normalization=normalization,
@@ -49,7 +51,8 @@ class UpBlock(nn.Module):
     def __init__(
         self,
         in_channels,
-        out_channels,
+        upsample_out_channels,
+        conv_out_channels,
         dropout_p,
         num_conv,
         kernel_size,
@@ -60,14 +63,15 @@ class UpBlock(nn.Module):
         super(UpBlock, self).__init__()
         self.uppool = ConvUpPool(
             in_channels=in_channels,
+            out_channels=upsample_out_channels,
             dim=len(kernel_size),
             pool_kernel_size=up_scale_factor,
             normalization=normalization,
             activate=activate,
         )
         self.conv = ConvBlock(
-            in_channels=in_channels // 2 + out_channels,
-            out_channels=out_channels,
+            in_channels=upsample_out_channels + conv_out_channels,
+            out_channels=conv_out_channels,
             dropout_p=dropout_p,
             dim=len(kernel_size),
             num_conv=num_conv,
@@ -84,7 +88,6 @@ class UpBlock(nn.Module):
         outputs = self.conv(torch.cat([skip_features, up_features], 1)) + up_features
         return self.activate_layer(outputs)
 
-
 class Encoder(nn.Module):
     def __init__(self, params):
         super(Encoder, self).__init__()
@@ -98,12 +101,13 @@ class Encoder(nn.Module):
         self.normalization = self.params["normalization"]
         self.activate = self.params["activate"]
 
-        Encoder_layers = []
+        self.Encoder_layers = nn.ModuleList()
         for i in range(len(self.num_conv_per_stage) - 1):
-            Encoder_layers.append(
+            self.Encoder_layers.append(
                 DownBlock(
                     in_channels=self.in_channels if i == 0 else features[i],
-                    out_channels=features[i],
+                    conv_out_channels=features[i],
+                    pool_out_channels=features[i+1],
                     dropout_p=self.dropout_p[i],
                     num_conv=self.num_conv_per_stage[i],
                     kernel_size=self.kernel_size[i],
@@ -112,7 +116,6 @@ class Encoder(nn.Module):
                     activate=self.activate,
                 )
             )
-        self.Encoder_layers = nn.Sequential(*Encoder_layers)
 
         self.bottleneck = ResidualBlock(
             in_channels=features[-1],
@@ -149,12 +152,13 @@ class Decoder(nn.Module):
 
         self.output_features = output_features
 
-        Decoder_layers = []
+        self.Decoder_layers = nn.ModuleList()
         for i in range(len(features) - 1):
-            Decoder_layers.append(
+            self.Decoder_layers.append(
                 UpBlock(
                     in_channels=features[i],
-                    out_channels=features[i + 1],
+                    upsample_out_channels=features[i + 1],
+                    conv_out_channels=features[i + 1],
                     dropout_p=self.dropout_p[i],
                     num_conv=self.num_conv_per_stage[i],
                     kernel_size=self.kernel_size[i],
@@ -163,9 +167,9 @@ class Decoder(nn.Module):
                     activate=self.activate,
                 )
             )
-        self.Decoder_layers = nn.Sequential(*Decoder_layers)
 
     def forward(self, encoder_out):
+        # low-resolution to high-resolution
         encoder_out = encoder_out[::-1]
         if self.output_features:
             decoder_out = []
@@ -202,17 +206,17 @@ class VNet(nn.Module):
             Conv_layer = nn.Conv3d
 
         if self.deep_supervision:
-            prediction_head = []
+            self.prediction_head = nn.ModuleList()
             # we will not do deep supervision on the prediction of bottleneck output feature
+            # the prediction_heads are from low to high resolution.
             for i in range(1, len(self.encoder_params["num_conv_per_stage"])):
-                prediction_head.append(
+                self.prediction_head.append(
                     Conv_layer(
                         self.decoder_params["features"][i],
                         params["out_channels"],
                         kernel_size=1,
                     )
                 )
-            self.prediction_head = nn.Sequential(*prediction_head)
         else:
             self.prediction_head = Conv_layer(
                 self.decoder_params["features"][-1],
@@ -229,16 +233,15 @@ class VNet(nn.Module):
                 outputs.append(self.prediction_head[i](decoder_out[i]))
             # we assume that the multi-level prediction ranking ranges from high resolution to low resolution
             if self.need_features:
-                net_out = encoder_out + decoder_out + outputs[::-1]
+                net_out = {"feature": encoder_out + decoder_out, "pred": outputs[::-1]}
             else:
-                net_out = outputs[::-1]
+                net_out = {"pred": outputs[::-1]}
         else:
             if self.need_features:
                 outputs = self.prediction_head(decoder_out[-1])
-                net_out = encoder_out + decoder_out
-                net_out.append(outputs)
+                net_out = {"feature": encoder_out + decoder_out, "pred": outputs}
             else:
-                net_out = self.prediction_head(decoder_out)
+                net_out = {"pred": self.prediction_head(decoder_out)}
 
         return net_out
 
@@ -254,6 +257,14 @@ class VNet(nn.Module):
         encoder_params["pool_kernel_size"] = params["pool_kernel_size"]
         encoder_params["normalization"] = params["normalization"]
         encoder_params["activate"] = params["activate"]
+        
+        assert (
+            len(encoder_params["features"])
+            == len(encoder_params["dropout_p"])
+            == len(encoder_params["num_conv_per_stage"])
+            == len(encoder_params["kernel_size"])
+            == (len(encoder_params["pool_kernel_size"]) + 1)
+        )
 
         decoder_params["features"] = params["features"][::-1]
         decoder_params["kernel_size"] = params["kernel_size"][::-1]
@@ -272,35 +283,37 @@ if __name__ == "__main__":
 
     from wcode.utils.file_operations import open_yaml
 
-    data = open_yaml("./Configs/test_networks.yaml")
+    data = open_yaml("./wcode/net/CNN/VNet/VNet_test.yaml")
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     print("-----VNet2d-----")
     vnet2d = VNet(data["Network2d"]).to(device)
-    inputs = torch.rand((4, 3, 64, 64)).to(device)
     begin = time.time()
-    outputs = vnet2d(inputs)
+    with torch.no_grad():
+        inputs = torch.rand((16, 1, 256, 256)).to(device)
+        outputs = vnet2d(inputs)
     print("Time:", time.time() - begin)
     print("Outputs:")
-    if isinstance(outputs, (list, tuple)):
-        for output in outputs:
+    if isinstance(outputs["pred"], (list, tuple)):
+        for output in outputs["pred"]:
             print(output.shape)
     else:
-        print(outputs.shape)
+        print(outputs["pred"].shape)
     total = sum(p.numel() for p in vnet2d.parameters())
     print("Total params: %.3fM" % (total / 1e6))
 
     print("-----VNet3d-----")
     vnet3d = VNet(data["Network3d"]).to(device)
-    inputs = torch.rand((4, 3, 64, 64, 64)).to(device)
     begin = time.time()
-    outputs = vnet3d(inputs)
+    with torch.no_grad():
+        inputs = torch.rand((2, 1, 16, 256, 256)).to(device)
+        outputs = vnet3d(inputs)
     print("Time:", time.time() - begin)
     print("Outputs:")
-    if isinstance(outputs, (list, tuple)):
-        for output in outputs:
+    if isinstance(outputs["pred"], (list, tuple)):
+        for output in outputs["pred"]:
             print(output.shape)
     else:
-        print(outputs.shape)
+        print(outputs["pred"].shape)
     total = sum(p.numel() for p in vnet3d.parameters())
     print("Total params: %.3fM" % (total / 1e6))

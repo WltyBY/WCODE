@@ -6,10 +6,12 @@ import numpy as np
 import torch.backends.cudnn as cudnn
 
 from datetime import datetime
+from tqdm import tqdm
 from time import time, sleep
-from torch import autocast
+from torch.amp import autocast
+from torch import nn
 from torch.utils.data import DataLoader
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 from torch._dynamo import OptimizedModule
 from monai.transforms import (
     Compose,
@@ -21,7 +23,7 @@ from monai.transforms import (
     ToTensor,
 )
 
-from wcode.net.VNet import VNet
+from wcode.net.build_network import build_network
 from wcode.training.dataset.BasedDataset import BasedDataset
 from wcode.training.loss.compound_loss import Tversky_and_CE_loss
 from wcode.training.loss.deep_supervision import DeepSupervisionWeightedSummator
@@ -29,18 +31,23 @@ from wcode.training.logs_writer.logger import logger
 from wcode.training.Collater import PatchBasedCollater
 from wcode.training.learning_rate.PolyLRScheduler import PolyLRScheduler
 from wcode.training.metrics import get_tp_fp_fn_tn
-from wcode.utils.file_operations import open_yaml, copy_file_to_dstFolder
+from wcode.training.data_augmentation.my_transforms import get_transforms
+from wcode.utils.file_operations import open_yaml, open_json, copy_file_to_dstFolder
 from wcode.utils.others import empty_cache, dummy_context
 from wcode.utils.collate_outputs import collate_outputs
+from wcode.utils.data_io import files_ending_for_2d_img, files_ending_for_sitk
 from wcode.inferring.PatchBasedPredictor import PatchBasedPredictor
+from wcode.inferring.NaturalImagePredictor import NaturalImagePredictor
 from wcode.inferring.Evaluator import Evaluator
 
 
 class PatchBasedTrainer(object):
-
-    def __init__(self, config_file_path: str, fold: int):
+    def __init__(self, config_file_path: str, fold: int, verbose: bool = False):
+        self.verbose = verbose
         self.config_dict = open_yaml(config_file_path)
-        del self.config_dict["Inferring_settings"]
+        if self.config_dict.__contains__("Inferring_settings"):
+            del self.config_dict["Inferring_settings"]
+
         self.get_train_settings(self.config_dict["Training_settings"])
         self.fold = fold
 
@@ -94,7 +101,25 @@ class PatchBasedTrainer(object):
 
     def get_train_settings(self, training_setting_dict):
         self.dataset_name = training_setting_dict["dataset_name"]
+        self.dataset_yaml = open_yaml(
+            os.path.join("./Dataset_preprocessed", self.dataset_name, "dataset.yaml")
+        )
+
+        if self.dataset_yaml["files_ending"] in files_ending_for_sitk:
+            self.natural_image_flag = False
+        elif self.dataset_yaml["files_ending"] in files_ending_for_2d_img:
+            self.natural_image_flag = True
+        else:
+            raise ValueError("Not supporting file extension.")
+
         self.modality = training_setting_dict["modality"]
+        if self.modality == None or self.modality == "all":
+            self.modality = [
+                int(i) for i in range(len(self.dataset_yaml["channel_names"]))
+            ]
+        self.channel_names = np.array(
+            [i for i in self.dataset_yaml["channel_names"].values()]
+        )[self.modality]
         self.method_name = training_setting_dict["method_name"]
         self.device_dict = training_setting_dict["device"]
         self.num_epochs = training_setting_dict["epoch"]
@@ -115,6 +140,38 @@ class PatchBasedTrainer(object):
         ]
         self.ignore_label = training_setting_dict["ignore_label"]
         self.checkpoint_path = training_setting_dict["checkpoint"]
+
+    def setting_check(self):
+        if len(self.config_dict["Network"]["pool_kernel_size"]) == len(
+            self.config_dict["Network"]["kernel_size"]
+        ):
+            """
+            Some networks have a convolutional layer that does not perform downsampling by default at the beginning to stabilize image features,
+            that is, the pooling kernel size is [1, 1, 1](3d) or [1, 1](2d). Since there is such a convolution layer by default in these networks,
+            I don't understand why the setting interface of the pooling kernel size of this layer is given.
+            """
+
+            if [1, 1, 1] == self.config_dict["Network"]["pool_kernel_size"][0]:
+                self.pool_kernel_size = self.config_dict["Network"]["pool_kernel_size"][
+                    1:
+                ]
+            else:
+                self.pool_kernel_size = self.config_dict["Network"]["pool_kernel_size"][
+                    1:
+                ]
+                self.pool_kernel_size[0] = [
+                    self.pool_kernel_size[0][i]
+                    * self.config_dict["Network"]["pool_kernel_size"][0][i]
+                    for i in range(len(self.pool_kernel_size[0]))
+                ]
+        else:
+            self.pool_kernel_size = self.config_dict["Network"]["pool_kernel_size"]
+
+        if (
+            self.config_dict["Network"].__contains__("activate")
+            and self.config_dict["Network"]["activate"].lower() == "prelu"
+        ):
+            self.weight_decay = 0
 
     def get_device(self):
         assert len(self.device_dict.keys()) == 1, "Device can only be GPU or CPU"
@@ -142,10 +199,18 @@ class PatchBasedTrainer(object):
         if not self.was_initialized:
             self.is_ddp = False
             self.init_random()
+            self.setting_check()
+
+            if len(self.config_dict["Network"]["kernel_size"][0]) == 3:
+                self.preprocess_config = "3d"
+            elif len(self.config_dict["Network"]["kernel_size"][0]) == 2:
+                self.preprocess_config = "2d"
+            else:
+                raise Exception()
+
             self.network = self.get_networks(self.config_dict["Network"]).to(
                 self.device
             )
-
             self.print_to_log_file("Compiling network...")
             self.network = torch.compile(self.network)
 
@@ -158,6 +223,7 @@ class PatchBasedTrainer(object):
                     "alpha": 0.5,
                     "beta": 0.5,
                     "smooth": 1e-5,
+                    "ignore_negetive_class": False,
                     "do_bg": False,
                     "ddp": self.is_ddp,
                     "apply_nonlin": True,
@@ -167,10 +233,6 @@ class PatchBasedTrainer(object):
                 weight_tversky=1,
                 ignore_label=self.ignore_label,
             )
-            if self.do_deep_supervision:
-                self.train_loss = self._build_deep_supervision_loss_object(
-                    self.train_loss
-                )
 
             self.val_loss = Tversky_and_CE_loss(
                 {
@@ -185,6 +247,11 @@ class PatchBasedTrainer(object):
                 weight_tversky=1,
                 ignore_label=self.ignore_label,
             )
+            if self.do_deep_supervision:
+                self.train_loss = self._build_deep_supervision_loss_object(
+                    self.train_loss
+                )
+                self.val_loss = self._build_deep_supervision_loss_object(self.val_loss)
 
             self.was_initialized = True
         else:
@@ -207,13 +274,13 @@ class PatchBasedTrainer(object):
         return loss
 
     def _get_deep_supervision_scales(self):
-        deep_supervision_scales = len(self.config_dict["Network"]["pool_kernel_size"])
-        return deep_supervision_scales
+        return self.pool_kernel_size
 
     def init_random(self):
         if self.deterministic:
             cudnn.benchmark = False
             cudnn.deterministic = True
+            # torch.use_deterministic_algorithms(True)
         else:
             cudnn.benchmark = True
             cudnn.deterministic = False
@@ -221,6 +288,8 @@ class PatchBasedTrainer(object):
         np.random.seed(self.random_seed)
         torch.manual_seed(self.random_seed)
         torch.cuda.manual_seed(self.random_seed)
+        torch.cuda.manual_seed_all(self.random_seed)
+        os.environ["PYTHONHASHSEED"] = str(self.random_seed)
 
     def print_to_log_file(self, *args, also_print_to_console=True, add_timestamp=True):
         timestamp = time()
@@ -251,7 +320,7 @@ class PatchBasedTrainer(object):
             print(*args)
 
     def get_networks(self, network_settings):
-        return VNet(network_settings)
+        return build_network(network_settings)
 
     def get_optimizers(self):
         optimizer = torch.optim.SGD(
@@ -266,6 +335,21 @@ class PatchBasedTrainer(object):
         return optimizer, lr_scheduler
 
     def get_train_and_val_transform(self):
+        # if self.natural_image_flag:
+        #     transform = {
+        #         "train": {
+        #             "random_resize": [0.9, 1.25],
+        #             "horizontal_flip": True,
+        #             "vertical_flip": True,
+        #             "random_affine": 0.3,
+        #             "random_rotation": 90,
+        #             "to_tensor": 1,
+        #         },
+        #         "val": {"to_tensor": 1},
+        #     }
+        #     train_transform = get_transforms(transform["train"])
+        #     val_transform = get_transforms(transform["val"])
+        # else:
         train_transform = Compose(
             [
                 RandFlipd(keys=["image", "label"], prob=0.2),
@@ -290,6 +374,7 @@ class PatchBasedTrainer(object):
     def get_train_and_val_dataset(self):
         train_dataset = BasedDataset(
             self.dataset_name,
+            self.preprocess_config,
             split="train",
             fold="fold" + str(self.fold),
             modality=self.modality,
@@ -297,6 +382,7 @@ class PatchBasedTrainer(object):
 
         val_dataset = BasedDataset(
             self.dataset_name,
+            self.preprocess_config,
             split="val",
             fold="fold" + str(self.fold),
             modality=self.modality,
@@ -306,17 +392,21 @@ class PatchBasedTrainer(object):
     def get_collator(self):
         train_transform, val_transform = self.get_train_and_val_transform()
         train_collator = PatchBasedCollater(
+            self.batch_size,
             self.patch_size,
             self.do_deep_supervision,
-            self.config_dict["Network"]["pool_kernel_size"],
+            self.pool_kernel_size,
+            self.channel_names,
             self.oversample_rate,
             self.probabilistic_oversampling,
             train_transform,
         )
         val_collator = PatchBasedCollater(
+            self.batch_size,
             self.patch_size,
-            False,
-            None,
+            self.do_deep_supervision,
+            self.pool_kernel_size,
+            self.channel_names,
             self.oversample_rate,
             self.probabilistic_oversampling,
             val_transform,
@@ -338,6 +428,7 @@ class PatchBasedTrainer(object):
             persistent_workers=True,
             worker_init_fn=self.worker_init_fn,
             collate_fn=train_collator,
+            drop_last=False,
         )
         # shuffle is True here, because we expect patch based validation to be more comprehensive.
         # If the number of validation iteration is smaller than the valset, the validation
@@ -350,6 +441,7 @@ class PatchBasedTrainer(object):
             pin_memory=True,
             persistent_workers=True,
             collate_fn=val_collator,
+            drop_last=False,
         )
         return train_loader, val_loader
 
@@ -361,7 +453,9 @@ class PatchBasedTrainer(object):
 
             self.train_epoch_start()
             train_outputs = []
-            for batch_id in range(self.tr_iterations_per_epoch):
+            for batch_id in tqdm(
+                range(self.tr_iterations_per_epoch), disable=self.verbose
+            ):
                 try:
                     train_outputs.append(self.train_step(next(self.iter_train)))
                 except StopIteration:
@@ -372,7 +466,9 @@ class PatchBasedTrainer(object):
             with torch.no_grad():
                 self.validation_epoch_start()
                 val_outputs = []
-                for batch_id in range(self.val_iterations_per_epoch):
+                for batch_id in tqdm(
+                    range(self.val_iterations_per_epoch), disable=self.verbose
+                ):
                     try:
                         val_outputs.append(self.validation_step(next(self.iter_val)))
                     except StopIteration:
@@ -441,7 +537,6 @@ class PatchBasedTrainer(object):
             self._best_ema is None
             or self.logger.logging["ema_fg_dice"][-1] > self._best_ema
         ):
-            self.best_epoch = epoch
             self._best_ema = self.logger.logging["ema_fg_dice"][-1]
             self.print_to_log_file(
                 f"Yayy! New best EMA pseudo Dice: {np.round(self._best_ema, decimals=4)}"
@@ -480,15 +575,16 @@ class PatchBasedTrainer(object):
         else:
             labels = labels.to(self.device, non_blocking=True)
 
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         with (
             autocast(self.device.type, enabled=True)
             if self.device.type == "cuda"
             else dummy_context()
         ):
-            output = self.network(images)
+            outputs = self.network(images)
+
             # Compute Loss
-            l = self.train_loss(output, labels)
+            l = self.train_loss(outputs["pred"], labels)
 
         if self.grad_scaler is not None:
             self.grad_scaler.scale(l).backward()
@@ -521,7 +617,7 @@ class PatchBasedTrainer(object):
 
         images = images.to(self.device, non_blocking=True).as_tensor()
         if isinstance(labels, list):
-            labels = labels[0].to(self.device, non_blocking=True)
+            labels = [i.to(self.device, non_blocking=True) for i in labels]
         else:
             labels = labels.to(self.device, non_blocking=True)
 
@@ -531,13 +627,19 @@ class PatchBasedTrainer(object):
             else dummy_context()
         ):
             outputs = self.network(images)
+            if isinstance(outputs, dict):
+                outputs = outputs["pred"]
             del images
             l = self.val_loss(outputs, labels)
 
         # use the new name of outputs and labels, so that you only need to change the network inference process
         # during validation and the variable name assignment code below, without changing any evaluation code.
-        output = outputs
-        target = labels
+        if isinstance(outputs, (list, tuple)):
+            output = outputs[0]
+            target = labels[0]
+        else:
+            output = outputs
+            target = labels
 
         # the following is needed for online evaluation. Fake dice (green line)
         axes = [0] + list(range(2, len(output.shape)))
@@ -553,7 +655,6 @@ class PatchBasedTrainer(object):
         tp, fp, fn, _ = get_tp_fp_fn_tn(
             predicted_segmentation_onehot, target, axes=axes, mask=None
         )
-
         tp_hard = tp.detach().cpu().numpy()
         fp_hard = fp.detach().cpu().numpy()
         fn_hard = fn.detach().cpu().numpy()
@@ -626,7 +727,10 @@ class PatchBasedTrainer(object):
                 key = key[7:]
             new_state_dict[key] = value
 
-        self.current_epoch = checkpoint["current_epoch"]
+        if "checkpoint_final.pth" in os.listdir(self.logs_output_folder):
+            self.current_epoch = self.num_epochs
+        else:
+            self.current_epoch = checkpoint["current_epoch"]
         self.logger.load_checkpoint(checkpoint["logging"])
         self._best_ema = checkpoint["_best_ema"]
 
@@ -642,20 +746,21 @@ class PatchBasedTrainer(object):
         self.lr_scheduler.ctr = checkpoint["LRScheduler_step"]
 
     def perform_actual_validation(self, save_probabilities: bool = False):
-        self.network.eval()
-
-        dataset_path = os.path.join("./Dataset", self.dataset_name)
+        self.print_to_log_file("----------Perform actual validation----------")
+        dataset_path = os.path.join("./Dataset_preprocessed", self.dataset_name)
         original_img_folder = os.path.join(
-            dataset_path,
-            (
-                "images"
-                if os.path.isdir(os.path.join(dataset_path, "images"))
-                else "imagesVal"
-            ),
+            dataset_path, "preprocessed_datas_" + self.preprocess_config
         )
+
         predictions_save_folder = os.path.join(self.logs_output_folder, "validation")
-        self.print_to_log_file("Best Epoch:", self.best_epoch)
-        model_path = os.path.join(self.logs_output_folder, "checkpoint_best.pth")
+        model_path = os.path.join(self.logs_output_folder, "checkpoint_final.pth")
+
+        best_saved_model = torch.load(
+            os.path.join(self.logs_output_folder, "checkpoint_best.pth")
+        )
+        self.print_to_log_file("Pseudo Best Epoch:", best_saved_model["current_epoch"])
+        del best_saved_model
+
         predict_configs = {
             "dataset_name": self.dataset_name,
             "modality": self.modality,
@@ -672,46 +777,83 @@ class PatchBasedTrainer(object):
             "use_gaussian": True,
             "perform_everything_on_gpu": True,
             "use_mirroring": True,
-            "allowed_mirroring_axes": [2],
+            "allowed_mirroring_axes": [0, 1] if self.natural_image_flag else [1, 2],
             "num_processes": self.num_processes,
         }
         self.config_dict["Inferring_settings"] = predict_configs
-        predictor = PatchBasedPredictor(
-            self.config_dict, allow_tqdm=False, verbose=False
+        
+        dataset_split = open_json(
+            os.path.join(
+                "./Dataset_preprocessed", self.dataset_name, "dataset_split.json"
+            )
         )
-        self.print_to_log_file("Start predicting.")
-        start = time()
-        predictor.predict_from_file(
-            predictor.original_img_folder,
-            predictor.predictions_save_folder,
-            predictor.modality,
-            predictor.save_probabilities,
-        )
-        self.print_to_log_file("Predicting ends. Cost: {}s".format(time() - start))
+        
+        data_path_list = [
+            i
+            for i in os.listdir(original_img_folder)
+            if i.endswith(".npy") and not i.endswith("_seg.npy")
+        ]
+        validation_data_file = [
+            i
+            for i in data_path_list
+            if i.split(".")[0] in dataset_split["fold" + str(self.fold)]["val"]
+        ]
+        validation_data_file.sort()
+        validation_data_path = [
+            os.path.join(original_img_folder, i) for i in validation_data_file
+        ]
+        validation_pkl_path = [
+            os.path.join(original_img_folder, i.replace(".npy", ".pkl"))
+            for i in validation_data_file
+        ]
+        predictions_save_path = [
+            os.path.join(predictions_save_folder, i.replace(".npy", ""))
+            for i in validation_data_file
+        ]
 
-        ground_truth_folder = os.path.join(
-            dataset_path,
-            (
-                "labels"
-                if os.path.isdir(os.path.join(dataset_path, "labels"))
-                else "labelsVal"
-            ),
-        )
-        dataset_yaml = open_yaml(os.path.join(dataset_path, "dataset.yaml"))
+        iter_lst = []
+        for data, output_file, data_properites in zip(
+            validation_data_path, predictions_save_path, validation_pkl_path
+        ):
+            iter_lst.append(
+                {
+                    "data": data,
+                    "output_file": output_file,
+                    "data_properites": data_properites,
+                }
+            )
+
+        if self.natural_image_flag:
+            predictor = NaturalImagePredictor(
+                self.config_dict, allow_tqdm=True, verbose=False
+            )
+            self.print_to_log_file("Start predicting.")
+            start = time()
+            predictor.predict_from_data_iterator(
+                data_iterator=iter_lst,
+                save_vis_mask=True,
+                save_or_return_probabilities=save_probabilities,
+            )
+            self.print_to_log_file("Predicting ends. Cost: {}s".format(time() - start))
+        else:
+            predictor = PatchBasedPredictor(
+                self.config_dict, allow_tqdm=True, verbose=False
+            )
+            self.print_to_log_file("Start predicting.")
+            start = time()
+            predictor.predict_from_data_iterator(
+                data_iterator=iter_lst,
+                predict_way=self.preprocess_config,
+                save_or_return_probabilities=save_probabilities,
+            )
+            self.print_to_log_file("Predicting ends. Cost: {}s".format(time() - start))
+
+        ground_truth_folder = os.path.join(dataset_path, "gt_segmentations")
         evaluator = Evaluator(
             predictions_save_folder,
             ground_truth_folder,
-            None,
-            foreground_classes=len(dataset_yaml["labels"]) - 1,
-            files_ending=dataset_yaml["files_ending"],
+            dataset_yaml_or_its_path=self.dataset_yaml,
             num_processes=self.num_processes,
         )
-        evaluator.compute_metrics()
+        evaluator.run()
         self.print_to_log_file("Evaluating ends.")
-
-
-if __name__ == "__main__":
-    setting_file_name = "SegRap2023_test.yaml"
-    settings_path = os.path.join("./Configs", setting_file_name)
-    Trainer = PatchBasedTrainer(settings_path, 0)
-    Trainer.run_training()

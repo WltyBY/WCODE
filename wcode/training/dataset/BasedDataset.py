@@ -4,6 +4,7 @@ import numpy as np
 from torch.utils.data import Dataset
 
 from wcode.utils.file_operations import open_json, open_yaml, open_pickle
+from wcode.utils.data_io import files_ending_for_2d_img, files_ending_for_sitk
 
 
 class BasedDataset(Dataset):
@@ -11,6 +12,7 @@ class BasedDataset(Dataset):
     def __init__(
         self,
         dataset_name,
+        preprocess_config,
         split="train",
         fold="fold0",
         modality=None,
@@ -18,6 +20,7 @@ class BasedDataset(Dataset):
         self.dataset_name = dataset_name
         self.split = split
         self.modality = modality
+        assert isinstance(self.modality, list)
 
         split_json_path = os.path.join(
             "./Dataset_preprocessed", self.dataset_name, "dataset_split.json"
@@ -28,13 +31,22 @@ class BasedDataset(Dataset):
             )
         self.split_json = open_json(split_json_path)
 
-        dataset_yaml_path = os.path.join("./Dataset", self.dataset_name, "dataset.yaml")
+        dataset_yaml_path = os.path.join("./Dataset_preprocessed", self.dataset_name, "dataset.yaml")
         if not os.path.isfile(dataset_yaml_path):
             raise Exception("dataset.yaml is needed when generating Dataset object.")
         self.dataset_yaml = open_yaml(dataset_yaml_path)
 
+        if self.dataset_yaml["files_ending"] in files_ending_for_sitk:
+            self.general_img_flag = False
+        elif self.dataset_yaml["files_ending"] in files_ending_for_2d_img:
+            self.general_img_flag = True
+        else:
+            raise Exception("Files' ending NOT SUPPORT!!!")
+
         self.preprocessed_dataset_folder_path = os.path.join(
-            "./Dataset_preprocessed", self.dataset_name, "preprocessed_datas"
+            "./Dataset_preprocessed",
+            self.dataset_name,
+            "preprocessed_datas_" + preprocess_config,
         )
 
         if self.split in ["train", "val"]:
@@ -53,18 +65,31 @@ class BasedDataset(Dataset):
 
     def __getitem__(self, idx):
         case = self.ids[idx]
-        data_dict = np.load(
-            os.path.join(self.preprocessed_dataset_folder_path, case + ".npz")
+        data = np.load(
+            os.path.join(self.preprocessed_dataset_folder_path, case + ".npy")
         )
+        seg = np.load(
+            os.path.join(self.preprocessed_dataset_folder_path, case + "_seg" + ".npy")
+        )
+        data_dict = {"data": data, "seg": seg}
         property_dict = open_pickle(
             os.path.join(self.preprocessed_dataset_folder_path, case + ".pkl")
         )
 
-        if self.modality is None or self.modality == "all":
-            sample = {"image": data_dict["data"], "label": data_dict["seg"]}
+        if self.general_img_flag:
+            data_lst = []
+            for i in range(len(property_dict["shapes"])):
+                count = 0
+                n_channel = property_dict["shapes"][i][0]
+                if i in self.modality:
+                    data_lst.append(data_dict["data"][list(range(count,count+n_channel))])
+                count += n_channel
+            sample = {"image": np.vstack(data_lst), "label": data_dict["seg"]}
         else:
-            assert isinstance(self.modality, list)
-            sample = {"image": data_dict["data"][self.modality], "label": data_dict["seg"]}
+            sample = {
+                "image": data_dict["data"][self.modality],
+                "label": data_dict["seg"],
+            }
 
         sample["idx"] = case
         sample["property"] = property_dict

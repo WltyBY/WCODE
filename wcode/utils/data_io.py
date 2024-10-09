@@ -1,23 +1,32 @@
 import os
 import re
+import cv2
 import SimpleITK as sitk
 import numpy as np
 
 from typing import List
 
+files_ending_for_sitk = {".nii.gz", ".mhd", ".nii", ".nrrd"}
+files_ending_for_2d_img = {".tif", ".jpg", ".png"}
 
-def get_all_img_and_label_path(dataset_name, files_ending):
+
+def get_all_img_and_label_path(dataset_name, files_ending, channel_names):
     dataset_folder_path = os.path.join("./Dataset", dataset_name)
     folder_lst = [
         i
         for i in os.listdir(dataset_folder_path)
         if not os.path.isfile(os.path.join(dataset_folder_path, i))
     ]
+    files_ending_lst = [
+        "{:0>4s}".format(channel_names) + files_ending
+        for channel_names in channel_names.keys()
+    ]
+    length_ends = len(files_ending_lst[0])
 
     if {"images", "labels"}.issubset(folder_lst) and len(folder_lst) == 2:
         images_folder = os.path.join(dataset_folder_path, "images")
         images_name_lst = [
-            i for i in os.listdir(images_folder) if i.endswith(files_ending)
+            i for i in os.listdir(images_folder) if i[-length_ends:] in files_ending_lst
         ]
         images_name_lst.sort()
 
@@ -38,14 +47,16 @@ def get_all_img_and_label_path(dataset_name, files_ending):
             output_dict[case_id]["image"].append(os.path.join(images_folder, img))
             if not output_dict[case_id]["label"]:
                 output_dict[case_id]["label"] = [os.path.join(labels_folder, label)]
-        whehter_need_to_split = True
+        whether_need_to_split = True
 
-        return output_dict, whehter_need_to_split
-    
+        return output_dict, whether_need_to_split
+
     elif {"imagesTr", "labelsTr", "imagesVal", "labelsVal"}.issubset(folder_lst):
         train_images_folder = os.path.join(dataset_folder_path, "imagesTr")
         train_images_name_lst = [
-            i for i in os.listdir(train_images_folder) if i.endswith(files_ending)
+            i
+            for i in os.listdir(train_images_folder)
+            if i[-length_ends:] in files_ending_lst
         ]
         train_images_name_lst.sort()
 
@@ -56,7 +67,9 @@ def get_all_img_and_label_path(dataset_name, files_ending):
 
         val_images_folder = os.path.join(dataset_folder_path, "imagesVal")
         val_images_name_lst = [
-            i for i in os.listdir(val_images_folder) if i.endswith(files_ending)
+            i
+            for i in os.listdir(val_images_folder)
+            if i[-length_ends:] in files_ending_lst
         ]
         val_images_name_lst.sort()
 
@@ -80,7 +93,9 @@ def get_all_img_and_label_path(dataset_name, files_ending):
         if {"imagesTs"}.issubset(folder_lst):
             test_images_folder = os.path.join(dataset_folder_path, "imagesTs")
             test_images_name_lst = [
-                i for i in os.listdir(test_images_folder) if i.endswith(files_ending)
+                i
+                for i in os.listdir(test_images_folder)
+                if i[-length_ends:] in files_ending_lst
             ]
             test_images_name_lst.sort()
             names_dict["test"]["images"] = [test_images_folder, test_images_name_lst]
@@ -91,7 +106,7 @@ def get_all_img_and_label_path(dataset_name, files_ending):
                 test_labels_name_lst = [
                     i
                     for i in os.listdir(test_labels_folder)
-                    if i.endswith(files_ending)
+                    if i[-length_ends:] in files_ending_lst
                 ]
 
                 names_dict["test"]["labels"] = [
@@ -108,7 +123,7 @@ def get_all_img_and_label_path(dataset_name, files_ending):
         for dataset_class in names_dict.keys():
             output_dict[dataset_class] = {}
             for img in names_dict[dataset_class]["images"][1]:
-                case_id = img.split("-")[1].split("_")[0]
+                case_id = img.split("_")[1]
                 if case_id not in output_dict[dataset_class].keys():
                     output_dict[dataset_class][case_id] = {}
                     output_dict[dataset_class][case_id]["image"] = []
@@ -125,9 +140,9 @@ def get_all_img_and_label_path(dataset_name, files_ending):
                     output_dict[dataset_class][case_id]["label"] = [
                         os.path.join(names_dict[dataset_class]["labels"][0], label)
                     ]
-        whehter_need_to_split = False
+        whether_need_to_split = False
 
-        return output_dict, whehter_need_to_split
+        return output_dict, whether_need_to_split
     else:
         raise Exception("dataset format error.")
 
@@ -207,13 +222,53 @@ def read_sitk_case(file_paths):
         raise RuntimeError()
 
     stacked_images = np.vstack(images)
+    '''
+    The origin order of all thing by SimpleITK is in x, y, z. You can check this by using .GetSize(), .GetSpacing().
+    This two is mostly used in our program. However, after transform the SimpleITK.SimpleITK.Image to np.NDarray using 
+    sitk.GetArrayFromImage(), the axis order of the array is changed to z, y, x. So, when use spacing and NDarray,
+    don't forget to change the order of spacing.
+    '''
     dict = {
         "spacing": spacings[0],
         "direction": directions[0],
         "origin": origins[0],
+        "shapes": [i.shape for i in images],
     }
 
     return stacked_images.astype(np.float32), dict
+
+
+def read_2d_img(file_paths):
+    """
+    file_paths: pathes of different modalities of the same sample
+    All the 2d images' shapes are in C H W
+    """
+    images = []
+    shapes = []
+    for f in file_paths:
+        img = cv2.cvtColor(cv2.imread(f), cv2.COLOR_BGR2RGB).transpose(2, 0, 1)
+        if check_whether_all_channels_the_same(img):
+            images.append(img[0][None])
+            shapes.append(img[0][None].shape)
+        else:
+            images.append(img)
+            shapes.append(img.shape)
+    stacked_images = np.vstack(images)
+    
+    return stacked_images.astype(np.float32), {"shapes": shapes}
+
+
+def check_whether_all_channels_the_same(img):
+    # img in c, h, w for 2D img
+    flag = True
+    compare_img = img[0]
+    for channel in range(1, img.shape[0]):
+        if not np.array_equal(compare_img, img[channel]):
+            flag = False
+            break
+        else:
+            compare_img = img[channel]
+    return flag
 
 
 def create_lists_from_splitted_dataset_folder(
@@ -229,20 +284,3 @@ def create_lists_from_splitted_dataset_folder(
             sorted([os.path.join(folder_path, i) for i in files if p.fullmatch(i)])
         )
     return list_of_lists
-
-
-if __name__ == "__main__":
-    output_dict, whehter_need_to_split = get_all_img_and_label_path("test1", ".nii.gz")
-    print(output_dict, whehter_need_to_split)
-
-    output_dict, whehter_need_to_split = get_all_img_and_label_path("test2", ".nii.gz")
-    print(output_dict, whehter_need_to_split)
-
-    output_dict, whehter_need_to_split = get_all_img_and_label_path("test3", ".nii.gz")
-    print(output_dict, whehter_need_to_split)
-
-    npy_array, dict = read_sitk_case(
-        ["./Dataset/RADCURE/images/RADCURE-0005_0000.nii.gz"]
-    )
-    print(npy_array.shape)
-    print(dict)

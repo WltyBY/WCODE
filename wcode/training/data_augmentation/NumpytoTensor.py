@@ -1,3 +1,4 @@
+import torch
 import numpy as np
 
 from wcode.training.data_augmentation.AbstractTransform import AbstractTransform
@@ -33,7 +34,6 @@ class NumpyToTensor(AbstractTransform):
         return tensor
 
     def __call__(self, **data_dict):
-        import torch
 
         if self.keys is None:
             for key, val in data_dict.items():

@@ -1,10 +1,13 @@
 acvl_utils
 matplotlib
 monai
-numpy
+numpy<2.0
 PyYAML
 scipy
 seaborn
 SimpleITK
 torch
 tqdm
+opencv-python
+shapely
+scikit-image

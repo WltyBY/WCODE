@@ -1,18 +1,22 @@
 import os
 import torch
 import traceback
+import itertools
 import multiprocessing
 import numpy as np
+import torch.nn.functional as F
 
 from tqdm import tqdm
 from time import sleep
-from typing import Tuple, Union, List
+from typing import Tuple, Union, List, Dict
+from torch import nn
 
-from wcode.net.VNet import VNet
+from wcode.net.build_network import build_network
 from wcode.preprocessing.preprocessor import Preprocessor
 from wcode.utils.file_operations import (
     open_yaml,
     open_json,
+    open_pickle,
     check_workers_alive_and_busy,
 )
 from wcode.utils.others import empty_cache, dummy_context
@@ -36,15 +40,15 @@ class PatchBasedPredictor(object):
         else:
             assert isinstance(config_file_path_or_dict, dict)
             self.config_dict = config_file_path_or_dict
-            
+
         self.get_inferring_settings(self.config_dict["Inferring_settings"])
-        
+
         self.device = self.get_device()
         self.allow_tqdm = allow_tqdm
         self.verbose = verbose
 
         self.dataset_yaml = open_yaml(
-            os.path.join("./Dataset", self.dataset_name, "dataset.yaml")
+            os.path.join("./Dataset_preprocessed", self.dataset_name, "dataset.yaml")
         )
         self.dataset_split = open_json(
             os.path.join(
@@ -102,14 +106,20 @@ class PatchBasedPredictor(object):
 
         self.num_segmentation_heads = self.config_dict["Network"]["out_channels"]
         self.network = self.get_networks(self.config_dict["Network"])
-        load_pretrained_weights(self.network, self.model_path, True)
+        load_pretrained_weights(self.network, self.model_path, load_all=True, verbose=True)
+
         self.network.to(self.device)
 
         print("Compiling network...")
         self.network = torch.compile(self.network)
 
-    def get_networks(self, network_settings):
-        return VNet(network_settings)
+    def get_networks(self, network_settings: Dict):
+        if "need_features" in network_settings.keys():
+            network_settings["need_features"] = False
+        if "weight_path" in network_settings.keys():
+            del network_settings["weight_path"]
+
+        return build_network(network_settings)
 
     def get_images_dict(
         self,
@@ -122,7 +132,7 @@ class PatchBasedPredictor(object):
         files_dict_of_lists = dict()
         files_ending = self.dataset_yaml["files_ending"]
 
-        checking_length = len("_{:0>4}".format(modality[0]) + files_ending)
+        checking_length = len("_{:0>4d}".format(modality[0]) + files_ending)
         modalities_with_ending_lst = []
         for i in modality:
             modalities_with_ending_lst.append("_{:0>4d}".format(i) + files_ending)
@@ -263,8 +273,11 @@ class PatchBasedPredictor(object):
         return slicers
 
     def _combine_network_outputs(self, x):
+        if isinstance(x, dict):
+            x = x["pred"]
+
         if isinstance(x, (List, Tuple)):
-            return x[0] + 0 * x[1]
+            return x[0]
         else:
             return x
 
@@ -279,49 +292,20 @@ class PatchBasedPredictor(object):
                 max(mirror_axes) <= len(x.shape) - 3
             ), "mirror_axes does not match the dimension of the input!"
 
-            num_predictons = 2 ** len(mirror_axes)
-            if 0 in mirror_axes:
-                prediction += torch.flip(
-                    self._combine_network_outputs(self.network(torch.flip(x, (2,)))),
-                    (2,),
-                )
-            if 1 in mirror_axes:
-                prediction += torch.flip(
-                    self._combine_network_outputs(self.network(torch.flip(x, (3,)))),
-                    (3,),
-                )
-            if 2 in mirror_axes:
-                prediction += torch.flip(
-                    self._combine_network_outputs(self.network(torch.flip(x, (4,)))),
-                    (4,),
-                )
-            if 0 in mirror_axes and 1 in mirror_axes:
-                prediction += torch.flip(
-                    self._combine_network_outputs(self.network(torch.flip(x, (2, 3)))),
-                    (2, 3),
-                )
-            if 0 in mirror_axes and 2 in mirror_axes:
-                prediction += torch.flip(
-                    self._combine_network_outputs(self.network(torch.flip(x, (2, 4)))),
-                    (2, 4),
-                )
-            if 1 in mirror_axes and 2 in mirror_axes:
-                prediction += torch.flip(
-                    self._combine_network_outputs(self.network(torch.flip(x, (3, 4)))),
-                    (3, 4),
-                )
-            if 0 in mirror_axes and 1 in mirror_axes and 2 in mirror_axes:
-                prediction += torch.flip(
-                    self._combine_network_outputs(
-                        self.network(torch.flip(x, (2, 3, 4)))
-                    ),
-                    (2, 3, 4),
-                )
-            prediction /= num_predictons
+            mirror_axes = [m + 2 for m in mirror_axes]
+            axes_combinations = [
+                c for i in range(len(mirror_axes)) for c in itertools.combinations(mirror_axes, i + 1)
+            ]
+            for axes in axes_combinations:
+                prediction += torch.flip(self._combine_network_outputs(self.network(torch.flip(x, axes))), axes)
+            prediction /= (len(axes_combinations) + 1)
 
         return prediction
 
     def predict_sliding_window_return_logits(self, input_image: torch.Tensor):
+        assert (
+            len(self.patch_size) == 3
+        ), "The patch size in 3D prediction for 3D volume should have 3 elements."
         assert isinstance(input_image, torch.Tensor)
 
         self.network.eval()
@@ -417,14 +401,124 @@ class PatchBasedPredictor(object):
         empty_cache(self.device)
         return predicted_logits[tuple([slice(None), *slicer_revert_padding[1:]])]
 
-    def predict_logits_from_preprocessed_data(self, data: torch.Tensor) -> torch.Tensor:
+    def predict_sliding_window_2d_slices_return_logits(self, input_image: torch.Tensor):
+        assert (
+            len(self.patch_size) == 3
+        ), "The patch size in 3D prediction for 3D volume should have 3 elements."
+        assert isinstance(input_image, torch.Tensor)
+
+        self.network.eval()
+        empty_cache(self.device)
+
+        with torch.no_grad():
+            with (
+                torch.autocast(self.device.type, enabled=True)
+                if self.device.type == "cuda"
+                else dummy_context()
+            ):
+                assert (
+                    len(input_image.shape) == 4
+                ), "input_image must be a 4D np.ndarray or torch.Tensor (c, z, y, x)"
+
+                if self.verbose:
+                    print("Input shape:", input_image.shape)
+                    print("step_size:", self.tile_step_size)
+                    print(
+                        "mirror_axes:",
+                        self.allowed_mirroring_axes if self.use_mirroring else None,
+                    )
+
+                # if input_image is smaller than tile_size we need to pad it to tile_size.
+                data, slicer_revert_padding = pad_nd_image(
+                    input_image, self.patch_size, "constant", {"value": 0}, True, None
+                )
+
+                slicers = self._internal_get_sliding_window_slicers(data.shape[1:])
+
+                # preallocate results and num_predictions
+                results_device = (
+                    self.device
+                    if self.perform_everything_on_gpu
+                    else torch.device("cpu")
+                )
+                if self.verbose:
+                    print("preallocating arrays")
+                try:
+                    data = data.to(self.device)
+                    predicted_logits = torch.zeros(
+                        (self.num_segmentation_heads, *data.shape[1:]),
+                        dtype=torch.half,
+                        device=results_device,
+                    )
+                    n_predictions = torch.zeros(
+                        data.shape[1:], dtype=torch.half, device=results_device
+                    )
+                    if self.use_gaussian:
+                        gaussian = compute_gaussian(
+                            tuple(self.patch_size),
+                            sigma_scale=1.0 / 8,
+                            value_scaling_factor=1000,
+                            device=results_device,
+                        )
+                except RuntimeError:
+                    # sometimes the stuff is too large for GPUs. In that case fall back to CPU
+                    results_device = torch.device("cpu")
+                    data = data.to(results_device)
+                    predicted_logits = torch.zeros(
+                        (self.num_segmentation_heads, *data.shape[1:]),
+                        dtype=torch.half,
+                        device=results_device,
+                    )
+                    n_predictions = torch.zeros(
+                        data.shape[1:], dtype=torch.half, device=results_device
+                    )
+                    if self.use_gaussian:
+                        gaussian = compute_gaussian(
+                            tuple(self.patch_size),
+                            sigma_scale=1.0 / 8,
+                            value_scaling_factor=1000,
+                            device=results_device,
+                        )
+                finally:
+                    empty_cache(self.device)
+
+                print("running prediction")
+                for sl in tqdm(slicers, disable=not self.allow_tqdm):
+                    workon = data[sl].permute(1, 0, 2, 3)
+                    workon = workon.to(self.device, non_blocking=False)
+
+                    prediction = (
+                        self._internal_maybe_mirror_and_predict(workon)
+                        .to(results_device)
+                        .permute(1, 0, 2, 3)
+                    )
+
+                    predicted_logits[sl] += (
+                        prediction * gaussian if self.use_gaussian else prediction
+                    )
+                    n_predictions[sl[1:]] += gaussian if self.use_gaussian else 1
+
+                predicted_logits /= n_predictions
+        empty_cache(self.device)
+        return predicted_logits[tuple([slice(None), *slicer_revert_padding[1:]])]
+
+    def predict_logits_from_preprocessed_data(
+        self, data: torch.Tensor, predict_way: str
+    ) -> torch.Tensor:
         original_perform_everything_on_gpu = self.perform_everything_on_gpu
         with torch.no_grad():
             prediction = None
             if self.perform_everything_on_gpu:
                 try:
                     data.to(self.device)
-                    prediction = self.predict_sliding_window_return_logits(data)
+                    if predict_way == "3d":
+                        prediction = self.predict_sliding_window_return_logits(data)
+                    elif predict_way == "2d":
+                        prediction = (
+                            self.predict_sliding_window_2d_slices_return_logits(data)
+                        )
+                    else:
+                        raise Exception('predict_way should be "2d" or "3d"')
 
                 except RuntimeError:
                     print(
@@ -437,7 +531,14 @@ class PatchBasedPredictor(object):
                     self.perform_everything_on_gpu = False
 
             if prediction is None:
-                prediction = self.predict_sliding_window_return_logits(data)
+                if predict_way == "3d":
+                    prediction = self.predict_sliding_window_return_logits(data)
+                elif predict_way == "2d":
+                    prediction = self.predict_sliding_window_2d_slices_return_logits(
+                        data
+                    )
+                else:
+                    raise Exception('predict_way should be "2d" or "3d"')
 
             print("Prediction done, transferring to CPU if needed")
             prediction = prediction.to("cpu")
@@ -447,7 +548,10 @@ class PatchBasedPredictor(object):
 
     # infer a single image
     def predict_single_npy_array(
-        self, input_images_lst: np.ndarray, save_or_return_probabilities: bool = False
+        self,
+        input_images_lst: np.ndarray,
+        preprocess_config: str,
+        save_or_return_probabilities: bool = False,
     ):
         """
         image_properties must only have a 'spacing' key!
@@ -456,12 +560,23 @@ class PatchBasedPredictor(object):
         if self.verbose:
             print("preprocessing")
         # input_images_lst means one case with its all modalities
-        data, _, property = ppa.run_case(input_images_lst, None)
+        data, _, property = ppa.run_case(input_images_lst, None, preprocess_config)
+
+        data_lst = []
+        for i in range(len(property["shapes"])):
+            count = 0
+            n_channel = property["shapes"][i][0]
+            if i in self.modality:
+                data_lst.append(data[list(range(count,count+n_channel))])
+            count += n_channel
+        data = np.vstack(data_lst)
         data = torch.from_numpy(data).contiguous().float()
 
         if self.verbose:
             print("predicting")
-        predicted_logits = self.predict_logits_from_preprocessed_data(data)
+        predicted_logits = self.predict_logits_from_preprocessed_data(
+            data, preprocess_config
+        )
         # data is on cpu here
 
         if self.verbose:
@@ -479,9 +594,10 @@ class PatchBasedPredictor(object):
             return ret
 
     # infer a list of images
-    def _generate_data_iterator(self, images_dict):
+    def _generate_data_iterator(self, images_dict, preprocess_config):
         return preprocessing_iterator_fromfiles(
             images_dict,
+            preprocess_config,
             self.predictions_save_folder,
             self.dataset_name,
             self.device.type == "cuda",
@@ -490,7 +606,7 @@ class PatchBasedPredictor(object):
         )
 
     def predict_from_data_iterator(
-        self, data_iterator, save_or_return_probabilities=False
+        self, data_iterator, predict_way, save_or_return_probabilities=False
     ):
         """
         each element returned by data_iterator must be a dict with 'data', 'output_file' and 'data_properites' keys!
@@ -503,10 +619,20 @@ class PatchBasedPredictor(object):
             r = []
             for preprocessed in data_iterator:
                 data = preprocessed["data"]
+                properties = preprocessed["data_properites"]
+                if isinstance(properties, str):
+                    properties = open_pickle(properties)
+
                 if isinstance(data, str):
-                    delfile = data
-                    data = torch.from_numpy(np.load(data))
-                    os.remove(delfile)
+                    data = np.load(data)
+                    data_lst = []
+                    for i in range(len(properties["shapes"])):
+                        count = 0
+                        n_channel = properties["shapes"][i][0]
+                        if i in self.modality:
+                            data_lst.append(data[list(range(count,count+n_channel))])
+                        count += n_channel
+                    data = torch.from_numpy(np.vstack(data_lst)).contiguous().float()
 
                 ofile = preprocessed["output_file"]
                 if ofile is not None:
@@ -515,8 +641,6 @@ class PatchBasedPredictor(object):
                     print(f"\nPredicting image of shape {data.shape}:")
 
                 print(f"perform_everything_on_gpu: {self.perform_everything_on_gpu}")
-
-                properties = preprocessed["data_properites"]
 
                 # let's not get into a runaway situation where the GPU predicts so fast that the disk has to b swamped with
                 # npy files
@@ -530,7 +654,9 @@ class PatchBasedPredictor(object):
                         export_pool, worker_list, r, allowed_num_queued=2
                     )
 
-                prediction = self.predict_logits_from_preprocessed_data(data).cpu()
+                prediction = self.predict_logits_from_preprocessed_data(
+                    data, predict_way
+                ).cpu()
 
                 if ofile is not None:
                     # this needs to go into background processes
@@ -587,9 +713,10 @@ class PatchBasedPredictor(object):
 
     def predict_from_file(
         self,
-        source_img_folder,
-        output_img_folder,
-        modality,
+        source_img_folder: str,
+        output_img_folder: str,
+        modality: List,
+        preprocess_config: str,
         save_or_return_probabilities=False,
     ):
         images_dict = self.get_images_dict(
@@ -598,37 +725,8 @@ class PatchBasedPredictor(object):
         if len(images_dict) == 0:
             return
 
-        data_iterator = self._generate_data_iterator(images_dict)
+        data_iterator = self._generate_data_iterator(images_dict, preprocess_config)
 
         return self.predict_from_data_iterator(
-            data_iterator, save_or_return_probabilities
+            data_iterator, preprocess_config, save_or_return_probabilities
         )
-
-
-if __name__ == "__main__":
-    setting_file_name = "SegRap2023_1.yaml"
-    settings_path = os.path.join("./Configs", setting_file_name)
-    predictor = PatchBasedPredictor(settings_path, allow_tqdm=True, verbose=False)
-    print(predictor.get_images_dict(predictor.original_img_folder, predictor.modality))
-    # img_lst = [
-    #     "/media/x/Wlty/LymphNodes/Dataset/SegRap2023/images/SegRap2023-0002_0000.nii.gz",
-    #     "/media/x/Wlty/LymphNodes/Dataset/SegRap2023/images/SegRap2023-0002_0001.nii.gz",
-    # ]
-    # ret = predictor.predict_single_npy_array(img_lst, False)
-    # import SimpleITK as sitk
-
-    # img_obj = sitk.ReadImage(
-    #     "/media/x/Wlty/LymphNodes/Dataset/SegRap2023/images/SegRap2023-0002_0000.nii.gz"
-    # )
-    # ret_obj = sitk.GetImageFromArray(ret)
-    # ret_obj.CopyInformation(img_obj)
-    # sitk.WriteImage(
-    #     ret_obj, os.path.join(predictor.predictions_save_folder, "test.nii.gz")
-    # )
-
-    predictor.predict_from_file(
-        predictor.original_img_folder,
-        predictor.predictions_save_folder,
-        predictor.modality,
-        predictor.save_probabilities,
-    )

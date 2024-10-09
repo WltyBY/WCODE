@@ -1,6 +1,8 @@
 import random
 import numpy as np
 
+from typing import List
+
 
 class Patchsampler(object):
     def __init__(
@@ -12,60 +14,183 @@ class Patchsampler(object):
         self.patch_size = np.array(patch_size)
         self.half_patch_size = self.patch_size // 2
         self.oversample_foreground_percent = oversample_foreground_percent
-        assert (
-            0 <= self.oversample_foreground_percent <= 1
-        ), "oversample_foreground_percent should be in [0, 1]."
         self.probabilistic_oversampling = probabilistic_oversampling
 
-    def run(self, image_lst, label_lst, oversample_fg_candidate):
+        if isinstance(self.oversample_foreground_percent, float):
+            assert (
+                0 <= self.oversample_foreground_percent <= 1
+            ), "oversample_foreground_percent should be in [0, 1]."
+        elif isinstance(self.oversample_foreground_percent, (list, tuple)):
+            assert (
+                all([i >= 0 for i in self.oversample_foreground_percent])
+                and sum(self.oversample_foreground_percent) == 1
+            ), "Each element and their sum should be in range [0, 1] and equal to 1."
+        else:
+            raise TypeError("Unsupported type for oversample_foreground_percent.")
+
+        if self.probabilistic_oversampling is False:
+            assert isinstance(
+                self.oversample_foreground_percent, float
+            ), "When probabilistic_oversampling is False, we do oversample on batch-level which means we would select (batchsize * oversample_foreground_percent) cases to do oversample and remains do randomly sample."
+        elif self.probabilistic_oversampling is True:
+            assert isinstance(
+                self.oversample_foreground_percent, (list, tuple)
+            ), "When probabilistic_oversampling is True, we do oversample on case-level which means we would randomly do oversample based on the given oversample_foreground_percent for each class and each case."
+        else:
+            raise TypeError("probabilistic_oversampling should be a bool variable.")
+        
+    def run(
+        self,
+        image_lst: List,
+        label_lst: List,
+        oversample_fg_candidate: List,
+        batchsize: int,
+    ):
         """
         Oversampler processes data from dataloader,
-        so the element of image_lst and label_lst is in (c, (z,) y, x)
+        so the elements of image_lst and label_lst should be in (c, (z,) y, x)
         """
-        batch_size = len(image_lst)
-        assert batch_size == len(
+        assert len(image_lst) == len(
             label_lst
         ), "image_lst and label_lst should be in the same length."
+
+        a = batchsize // len(image_lst)
+        b = batchsize % len(image_lst)
+        idx_lst = [i for i in range(len(image_lst))] * a + [i for i in range(b)]
+        idx_lst_passed = idx_lst
 
         if self.probabilistic_oversampling:
             # Determine whether to oversample based on probability
             image_sampled = []
             label_sampled = []
-            for i in range(batch_size):
-                if random.random() <= self.oversample_foreground_percent:
-                    # do oversample
-                    image_patch, label_patch = self._oversample(image_lst[i], label_lst[i], oversample_fg_candidate[i])
-                else:
-                    image_patch, label_patch = self._normal_sample(image_lst[i], label_lst[i])
-                image_sampled.append(image_patch[None])
-                label_sampled.append(label_patch[None])
+            image_iter = iter(image_lst)
+            label_iter = iter(label_lst)
+            OFC_iter = iter(oversample_fg_candidate)
+            for _ in range(batchsize):
+                sampled_class = random.choices(
+                    [i for i in range(len(self.oversample_foreground_percent))],
+                    weights=self.oversample_foreground_percent,
+                    k=1,
+                )[0]
+                try:
+                    if sampled_class != 0:
+                        # do oversample
+                        image_patch, label_patch = self._oversample(
+                            next(image_iter),
+                            next(label_iter),
+                            next(OFC_iter)[sampled_class],
+                        )
+                    else:
+                        image_patch, label_patch = self._normal_sample(
+                            next(image_iter), next(label_iter)
+                        )
+                        _ = next(OFC_iter)
+                    # add one more dim: batchsize
+                    image_sampled.append(image_patch[None])
+                    label_sampled.append(label_patch[None])
+                except StopIteration:
+                    image_iter = iter(image_lst)
+                    label_iter = iter(label_lst)
+                    OFC_iter = iter(oversample_fg_candidate)
+                    if sampled_class != 0:
+                        # do oversample
+                        image_patch, label_patch = self._oversample(
+                            next(image_iter),
+                            next(label_iter),
+                            next(OFC_iter)[sampled_class],
+                        )
+                    else:
+                        image_patch, label_patch = self._normal_sample(
+                            next(image_iter), next(label_iter)
+                        )
+                        _ = next(OFC_iter)
+                    # add one more dim: batchsize
+                    image_sampled.append(image_patch[None])
+                    label_sampled.append(label_patch[None])
         else:
-            num_oversample = round(self.oversample_foreground_percent * batch_size)
-            idx_lst = [i for i in range(batch_size)]
-            sampled_idx = random.sample(idx_lst, num_oversample)
-            remain_idx = np.setdiff1d(idx_lst, sampled_idx)
+            num_oversample = round(self.oversample_foreground_percent * batchsize)
+
+            # len(image_lst) <= batchsize
+            sampled_idx = np.random.choice(
+                range(len(idx_lst)), num_oversample, replace=False
+            )
+            oversample_idx = np.array([False for _ in range(len(idx_lst))])
+            oversample_idx[sampled_idx] = True
+
             image_sampled = []
             label_sampled = []
-            for i in range(batch_size):
-                if i in sampled_idx:
-                    # do oversample
-                    image_patch, label_patch = self._oversample(image_lst[i], label_lst[i], oversample_fg_candidate[i])
-                elif i in remain_idx:
-                    image_patch, label_patch = self._normal_sample(image_lst[i], label_lst[i])
-                else:
-                    raise Exception("Maybe something wrong.")
-                image_sampled.append(image_patch[None])
-                label_sampled.append(label_patch[None])
+            idx_lst = iter(idx_lst)
+            oversample_idx = iter(oversample_idx)
+            for _ in range(batchsize):
+                try:
+                    idx = next(idx_lst)
+                    oversample_flag = next(oversample_idx)
+                    if oversample_flag:
+                        # do oversample
+                        candidate = []
+                        for i in oversample_fg_candidate[idx].keys():
+                            if (
+                                i != 0
+                                and not isinstance(oversample_fg_candidate[idx][i], str)
+                            ):
+                                candidate.append(oversample_fg_candidate[idx][i])
+                        candidate = np.vstack(candidate)
 
-        return np.vstack(image_sampled), np.vstack(label_sampled)
+                        image_patch, label_patch = self._oversample(
+                            image_lst[idx],
+                            label_lst[idx],
+                            candidate,
+                        )
+                    else:
+                        image_patch, label_patch = self._normal_sample(
+                            image_lst[idx], label_lst[idx]
+                        )
+                    image_sampled.append(image_patch[None])
+                    label_sampled.append(label_patch[None])
+                except StopIteration:
+                    idx_lst = iter(idx_lst)
+                    oversample_idx = iter(oversample_idx)
+
+                    idx = next(idx_lst)
+                    oversample_flag = next(oversample_idx)
+                    if oversample_flag:
+                        # do oversample
+                        candidate = []
+                        for i in oversample_fg_candidate[idx].keys():
+                            if (
+                                i != 0
+                                and not isinstance(oversample_fg_candidate[idx][i], str)
+                            ):
+                                candidate.append(oversample_fg_candidate[idx][i])
+                        candidate = np.vstack(candidate)
+
+                        image_patch, label_patch = self._oversample(
+                            image_lst[idx],
+                            label_lst[idx],
+                            candidate,
+                        )
+                    else:
+                        image_patch, label_patch = self._normal_sample(
+                            image_lst[idx], label_lst[idx]
+                        )
+                    image_sampled.append(image_patch[None])
+                    label_sampled.append(label_patch[None])
+
+        return np.vstack(image_sampled), np.vstack(label_sampled), idx_lst_passed
 
     def _oversample(self, image, label, oversample_fg_candidate):
         # image and label in (c, (z,) y, x)
         shape = np.array(image.shape[1:])
         dim = len(self.half_patch_size)
         assert len(shape) == dim, "shape:{}, dim:{}".format(shape, dim)
-
-        index_range_low, index_range_up = self._get_index_range(dim, shape, True)
+        if (
+            isinstance(oversample_fg_candidate, str)
+            and oversample_fg_candidate == "No_fg_point"
+        ):
+            # case with all pixels are the background.
+            index_range_low, index_range_up = self._get_index_range(dim, shape, False)
+        else:
+            index_range_low, index_range_up = self._get_index_range(dim, shape, True)
         assert np.all(
             index_range_low < index_range_up
         ), "The patch size is too big! Patch Size:{}, Low Index:{}, Up Index:{}".format(
@@ -74,12 +199,23 @@ class Patchsampler(object):
 
         # get the foreground voxels' index
         # fg_index = zip(*np.where(label[0] > 0))
-        candidate_fg_index = [
-            tuple(fg)
-            for fg in oversample_fg_candidate
-            if tuple(fg) < tuple(index_range_up) and tuple(fg) > tuple(index_range_low)
-        ]
-        sampled_voxel = random.sample(candidate_fg_index, 1)
+        if (
+            isinstance(oversample_fg_candidate, str)
+            and oversample_fg_candidate == "No_fg_point"
+        ):
+            # case with all pixels are the background.
+            sampled_voxel = [
+                np.random.randint(index_range_low[i], index_range_up[i])
+                for i in range(len(index_range_low))
+            ]
+        else:
+            candidate_fg_index = [
+                tuple(fg)
+                for fg in oversample_fg_candidate
+                if tuple(fg) < tuple(index_range_up)
+                and tuple(fg) > tuple(index_range_low)
+            ]
+            sampled_voxel = random.sample(candidate_fg_index, 1)
 
         bbox_lbs = np.array(sampled_voxel)[0] - self.half_patch_size
         bbox_ubs = bbox_lbs + self.patch_size
@@ -90,37 +226,22 @@ class Patchsampler(object):
         overflow_flag = [shape[i] < bbox_ubs[i] for i in range(dim)]
         # True in it means the direction of this axis need to pad
 
-        if np.any(underflow_flag + overflow_flag):
-            valid_bbmin = [max(0, bbox_lbs[i]) for i in range(dim)]
-            valid_bbmax = [min(shape[i], bbox_ubs[i]) for i in range(dim)]
+        if np.any(underflow_flag):
+            # refine bbmin
+            for i in range(len(underflow_flag)):
+                if underflow_flag[i]:
+                    bbox_ubs[i] = bbox_ubs[i] - bbox_lbs[i]
+                    bbox_lbs[i] = 0
 
-            valid_image = self._bbmin_and_bbmax_crop(
-                image, dim, valid_bbmin, valid_bbmax
-            )
-            valid_label = self._bbmin_and_bbmax_crop(
-                label, dim, valid_bbmin, valid_bbmax
-            )
-            # padding_size
-            padding = [
-                (-min(0, bbox_lbs[i]), max(bbox_ubs[i] - shape[i], 0))
-                for i in range(dim)
-            ]
-            data_per_channel = []
-            for i in range(image.shape[0]):
-                pad_value = np.percentile(valid_image[i], 0.1)
-                data_per_channel.append(
-                    np.pad(
-                        valid_image[i],
-                        padding,
-                        "constant",
-                        constant_values=pad_value,
-                    )[None]
-                )
-            data = np.vstack(data_per_channel)
-            seg = np.pad(valid_label, ((0, 0), *padding), "constant", constant_values=0)
-        else:
-            data = self._bbmin_and_bbmax_crop(image, dim, bbox_lbs, bbox_ubs)
-            seg = self._bbmin_and_bbmax_crop(label, dim, bbox_lbs, bbox_ubs)
+        if np.any(overflow_flag):
+            # refine bbmax
+            for i in range(len(overflow_flag)):
+                if overflow_flag[i]:
+                    bbox_lbs[i] = bbox_lbs[i] - (bbox_ubs[i] - shape[i])
+                    bbox_ubs[i] = shape[i]
+        
+        data = self._bbmin_and_bbmax_crop(image, dim, bbox_lbs, bbox_ubs)
+        seg = self._bbmin_and_bbmax_crop(label, dim, bbox_lbs, bbox_ubs)
 
         return data, seg
 
@@ -144,8 +265,8 @@ class Patchsampler(object):
 
     def _get_index_range(self, dim, shape, oversample_flag):
         if dim == 2:
-            index_range_low = np.array([0, 0])
-            index_range_up = shape
+            index_range_low = self.half_patch_size
+            index_range_up = shape - self.patch_size + self.half_patch_size
         elif dim == 3:
             if oversample_flag:
                 # oversample, only limit Z-axis range here
