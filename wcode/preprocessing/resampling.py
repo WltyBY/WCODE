@@ -66,13 +66,18 @@ def resample_ND_data_to_given_shape(data, out_shape, is_seg):
         return ndimage.interpolation.zoom(data, scale, order=3)
 
 
-def resample_npy_with_channels_on_spacing(data, origin_spacing, target_spacing, is_seg=False):
+def resample_npy_with_channels_on_spacing(data, origin_spacing, target_spacing, channel_names):
     assert data.ndim == 4
 
     zoom = [origin_spacing[i] / target_spacing[i] for i in range(3)]
     zoom = [zoom[2], zoom[1], zoom[0]]
     data_resampled = []
-    for i in range(data.shape[0]):
+    for i, channel_name in enumerate(channel_names):
+        if any(True if s in channel_name else False for s in ["mask", "label", "seg"]):
+            is_seg = True
+        else:
+            is_seg = False
+        
         if is_seg:
             data_resampled.append(
                 ndimage.interpolation.zoom(data[i], zoom, order=0)[None]
@@ -86,7 +91,7 @@ def resample_npy_with_channels_on_spacing(data, origin_spacing, target_spacing, 
     return data_resampled
 
 
-def resample_npy_with_channels_on_shape(data, target_shape, is_seg=False):
+def resample_npy_with_channels_on_shape(data, target_shape, channel_names):
     assert data.ndim == 4
     shape0 = data.shape[1:]
     assert len(shape0) == len(target_shape)
@@ -94,7 +99,12 @@ def resample_npy_with_channels_on_shape(data, target_shape, is_seg=False):
     scale = [(target_shape[i] + 0.0) / shape0[i] for i in range(len(shape0))]
 
     data_resampled = []
-    for i in range(data.shape[0]):
+    for i, channel_name in enumerate(channel_names):
+        if any(True if s in channel_name else False for s in ["mask", "label", "seg"]):
+            is_seg = True
+        else:
+            is_seg = False
+
         if is_seg:
             data_resampled.append(
                 ndimage.interpolation.zoom(data[i], scale, order=0)[None]

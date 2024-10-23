@@ -16,7 +16,7 @@ class Patchsampler(object):
         self.oversample_foreground_percent = oversample_foreground_percent
         self.probabilistic_oversampling = probabilistic_oversampling
 
-        if isinstance(self.oversample_foreground_percent, float):
+        if isinstance(self.oversample_foreground_percent, (float, int)):
             assert (
                 0 <= self.oversample_foreground_percent <= 1
             ), "oversample_foreground_percent should be in [0, 1]."

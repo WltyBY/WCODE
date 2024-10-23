@@ -10,7 +10,7 @@ parser.add_argument(
     "--preprocess_config", type=str, default="3d", help="2d or 3d"
 )
 parser.add_argument(
-    "--five_fold", type=bool, default=True, help="whether do 5-fold val"
+    "--five_fold", type=bool, default=False, help="whether do 5-fold val"
 )
 parser.add_argument(
     "--data_analysis_flag",

@@ -3,7 +3,7 @@ import numpy as np
 
 from typing import Union, List, Tuple
 
-from wcode.preprocessing.resampling import resample_npy_with_channels_on_shape
+from wcode.preprocessing.resampling import resample_ND_data_to_given_shape
 from wcode.utils.file_operations import open_yaml, save_pickle, save_itk
 
 
@@ -96,15 +96,21 @@ def convert_predicted_logits_to_segmentation_with_correct_shape(
     torch.set_num_threads(num_threads_torch)
 
     # resample to original shape (revert resampling)
-    predicted_logits = resample_npy_with_channels_on_shape(
-        (
-            predicted_logits.type(torch.float32)
-            if isinstance(predicted_logits, torch.Tensor)
-            else predicted_logits.astype("float32")
-        ),
-        properties_dict["shape_after_cropping_and_before_resampling"],
-        is_seg=True,
+    predicted_logits = (
+        predicted_logits.type(torch.float32)
+        if isinstance(predicted_logits, torch.Tensor)
+        else predicted_logits.astype("float32")
     )
+    predicted_logits_lst = []
+    for i in range(predicted_logits.shape[0]):
+        predicted_logits_lst.append(
+            resample_ND_data_to_given_shape(
+                predicted_logits[i],
+                properties_dict["shape_after_cropping_and_before_resampling"],
+                is_seg=True,
+            )[None]
+        )
+    predicted_logits = torch.from_numpy(np.vstack(predicted_logits_lst)).float()
     # return value of resampling_fn_probabilities can be ndarray or Tensor but that doesnt matter because
     # apply_inference_nonlin will covnert to torch
     predicted_probabilities = apply_inference_nonlin(predicted_logits)
@@ -164,9 +170,7 @@ def export_prediction_from_logits(
     # save
     if return_probabilities:
         segmentation_final, probabilities_final = ret
-        np.savez_compressed(
-            ofile + ".npz", probabilities=probabilities_final
-        )
+        np.savez_compressed(ofile + ".npz", probabilities=probabilities_final)
         save_pickle(properties_dict, ofile + ".pkl")
         del probabilities_final, ret
     else:

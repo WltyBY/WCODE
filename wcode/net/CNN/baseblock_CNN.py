@@ -33,6 +33,7 @@ class ConvBlock(nn.Module):
         padding_size=(1, 1, 1),
         normalization="batchnorm",
         activate="leakyrelu",
+        need_bias=True,
     ):
         super(ConvBlock, self).__init__()
         Conv_layer, Norm_layer = module_generate(dim, normalization)
@@ -51,7 +52,7 @@ class ConvBlock(nn.Module):
                         self.out_channels,
                         kernel_size=kernel_size,
                         padding=padding_size,
-                        bias=False,
+                        bias=need_bias,
                     ),
                     Norm_layer(self.out_channels, affine=True),
                     Activate_layer(),
@@ -76,6 +77,7 @@ class ResidualBlock(nn.Module):
         padding_size=(1, 1, 1),
         normalization="batchnorm",
         activate="leakyrelu",
+        need_bias=True,
     ):
         super(ResidualBlock, self).__init__()
         Conv_layer, Norm_layer = module_generate(dim, normalization)
@@ -87,7 +89,7 @@ class ResidualBlock(nn.Module):
 
         if self.in_channels != self.out_channels:
             self.conv_trans = Conv_layer(
-                self.in_channels, self.out_channels, kernel_size=1
+                self.in_channels, self.out_channels, kernel_size=1, bias=need_bias
             )
 
         layer = []
@@ -99,7 +101,7 @@ class ResidualBlock(nn.Module):
                         self.out_channels,
                         kernel_size=kernel_size,
                         padding=padding_size,
-                        bias=False,
+                        bias=need_bias,
                     ),
                     Norm_layer(self.out_channels, affine=True),
                     Activate_layer() if i != num_conv - 1 else nn.Identity(),

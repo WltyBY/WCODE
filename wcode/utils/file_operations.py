@@ -99,3 +99,19 @@ def check_workers_alive_and_busy(export_pool: Pool,
     if sum(not_ready) >= (len(export_pool._pool) + allowed_num_queued):
         return True
     return False
+
+
+def dicom2nifti(dcm_folder, nii_save_path):
+    reader = sitk.ImageSeriesReader()
+    seriesIDs = reader.GetGDCMSeriesIDs(dcm_folder)
+    N = len(seriesIDs)
+    lens = np.zeros([N])
+    for i in range(N):
+        dicom_names = reader.GetGDCMSeriesFileNames(dcm_folder, seriesIDs[i])
+        lens[i] = len(dicom_names)
+    N_MAX = np.argmax(lens)
+    dicom_names = reader.GetGDCMSeriesFileNames(dcm_folder, seriesIDs[N_MAX])
+    reader.SetFileNames(dicom_names)
+    image = reader.Execute()
+
+    sitk.WriteImage(image, nii_save_path)

@@ -150,6 +150,27 @@ class Evaluator:
                 results[r]["Dice"] = 2 * tp / (2 * tp + fp + fn)
                 results[r]["IoU"] = tp / (tp + fp + fn)
 
+            results[r]["Accuracy"] = (tp + tn) / (tp + tn + fp + fn)
+
+            if tp + fp == 0:
+                results[r]["Precision"] = np.nan
+            else:
+                results[r]["Precision"] = tp / (tp + fp)
+
+            if tp + fn == 0:
+                results[r]["Recall"] = np.nan
+            else:
+                results[r]["Recall"] = tp / (tp + fn)
+
+            if np.nan in [results[r]["Precision"], results[r]["Recall"]]:
+                results[r]["F1 score"] = np.nan
+            else:
+                if results[r]["Precision"] + results[r]["Recall"] == 0:
+                    results[r]["F1 score"] = np.nan
+                else:
+                    results[r]["F1 score"] = (
+                        2 * results[r]["Precision"] * results[r]["Recall"]
+                    ) / (results[r]["Precision"] + results[r]["Recall"])
             results[r]["FP"] = fp
             results[r]["TP"] = tp
             results[r]["FN"] = fn
@@ -161,12 +182,12 @@ class Evaluator:
 
 
 if __name__ == "__main__":
-    prediction_folder = "./Logs/HNTSMRG2024pre/HNTSMRG2024pre_213/fold_0/validation"
-    ground_truth_folder = "./Dataset/HNTSMRG2024pre/labels"
+    prediction_folder = "./Logs/MoNuSegFully/MoNuSegUpper_bound/fold_0/validation"
+    ground_truth_folder = "./Dataset_preprocessed/MoNuSegFully/gt_segmentations"
+    dataset_yaml = "./Dataset_preprocessed/MoNuSegFully/dataset.yaml"
     eva = Evaluator(
         prediction_folder,
         ground_truth_folder,
-        foreground_classes=2,
-        files_ending=".nii.gz",
+        dataset_yaml,
     )
     eva.run()

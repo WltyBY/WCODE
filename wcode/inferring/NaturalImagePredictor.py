@@ -401,8 +401,8 @@ class NaturalImagePredictor(object):
         data, _, property = ppa.run_case(input_images_lst, None, preprocess_config)
 
         data_lst = []
+        count = 0
         for i in range(len(property["shapes"])):
-            count = 0
             n_channel = property["shapes"][i][0]
             if i in self.modality:
                 data_lst.append(data[list(range(count, count + n_channel))])
@@ -494,8 +494,8 @@ class NaturalImagePredictor(object):
                 if isinstance(data, str):
                     data = np.load(data)
                     data_lst = []
+                    count = 0
                     for i in range(len(properties["shapes"])):
-                        count = 0
                         n_channel = properties["shapes"][i][0]
                         if i in self.modality:
                             data_lst.append(data[list(range(count, count + n_channel))])
@@ -606,3 +606,4 @@ class NaturalImagePredictor(object):
             save_vis_mask,
             save_or_return_probabilities,
         )
+

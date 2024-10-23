@@ -58,7 +58,7 @@ def load_pretrained_weights(network, fname, load_all=True, verbose=False):
     )
     if verbose:
         print(
-            "Below is the list of overlapping blocks in pretrained model and nnUNet architecture:"
+            "Below is the list of overlapping blocks in pretrained model and loaded model architecture:"
         )
         for key, value in pretrained_dict.items():
             print(key, "shape", value.shape)

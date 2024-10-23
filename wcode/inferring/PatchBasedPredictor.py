@@ -50,6 +50,12 @@ class PatchBasedPredictor(object):
         self.dataset_yaml = open_yaml(
             os.path.join("./Dataset_preprocessed", self.dataset_name, "dataset.yaml")
         )
+        self.dataset_yaml["channel_names"] = {
+            key: value
+            for key, value in self.dataset_yaml["channel_names"].items()
+            if int(key) in self.modality
+        }
+        
         self.dataset_split = open_json(
             os.path.join(
                 "./Dataset_preprocessed", self.dataset_name, "dataset_split.json"
@@ -60,6 +66,10 @@ class PatchBasedPredictor(object):
     def get_inferring_settings(self, inferring_setting_dict):
         self.dataset_name = inferring_setting_dict["dataset_name"]
         self.modality = inferring_setting_dict["modality"]
+        if self.modality == None or self.modality == "all":
+            self.modality = [
+                int(i) for i in range(len(self.dataset_yaml["channel_names"]))
+            ]
         self.fold = inferring_setting_dict["fold"]
         self.split = inferring_setting_dict["split"]
         self.original_img_folder = inferring_setting_dict["original_img_folder"]
@@ -106,7 +116,9 @@ class PatchBasedPredictor(object):
 
         self.num_segmentation_heads = self.config_dict["Network"]["out_channels"]
         self.network = self.get_networks(self.config_dict["Network"])
-        load_pretrained_weights(self.network, self.model_path, load_all=True, verbose=True)
+        load_pretrained_weights(
+            self.network, self.model_path, load_all=True, verbose=True
+        )
 
         self.network.to(self.device)
 
@@ -276,7 +288,7 @@ class PatchBasedPredictor(object):
         if isinstance(x, dict):
             x = x["pred"]
 
-        if isinstance(x, (List, Tuple)):
+        if isinstance(x, (list, tuple)):
             return x[0]
         else:
             return x
@@ -294,11 +306,16 @@ class PatchBasedPredictor(object):
 
             mirror_axes = [m + 2 for m in mirror_axes]
             axes_combinations = [
-                c for i in range(len(mirror_axes)) for c in itertools.combinations(mirror_axes, i + 1)
+                c
+                for i in range(len(mirror_axes))
+                for c in itertools.combinations(mirror_axes, i + 1)
             ]
             for axes in axes_combinations:
-                prediction += torch.flip(self._combine_network_outputs(self.network(torch.flip(x, axes))), axes)
-            prediction /= (len(axes_combinations) + 1)
+                prediction += torch.flip(
+                    self._combine_network_outputs(self.network(torch.flip(x, axes))),
+                    axes,
+                )
+            prediction /= len(axes_combinations) + 1
 
         return prediction
 
@@ -563,14 +580,13 @@ class PatchBasedPredictor(object):
         data, _, property = ppa.run_case(input_images_lst, None, preprocess_config)
 
         data_lst = []
+        count = 0
         for i in range(len(property["shapes"])):
-            count = 0
             n_channel = property["shapes"][i][0]
             if i in self.modality:
-                data_lst.append(data[list(range(count,count+n_channel))])
+                data_lst.append(data[list(range(count, count + n_channel))])
             count += n_channel
-        data = np.vstack(data_lst)
-        data = torch.from_numpy(data).contiguous().float()
+        data = torch.from_numpy(np.vstack(data_lst)).contiguous().float()
 
         if self.verbose:
             print("predicting")
@@ -597,6 +613,7 @@ class PatchBasedPredictor(object):
     def _generate_data_iterator(self, images_dict, preprocess_config):
         return preprocessing_iterator_fromfiles(
             images_dict,
+            self.modality,
             preprocess_config,
             self.predictions_save_folder,
             self.dataset_name,
@@ -626,11 +643,11 @@ class PatchBasedPredictor(object):
                 if isinstance(data, str):
                     data = np.load(data)
                     data_lst = []
+                    count = 0
                     for i in range(len(properties["shapes"])):
-                        count = 0
                         n_channel = properties["shapes"][i][0]
                         if i in self.modality:
-                            data_lst.append(data[list(range(count,count+n_channel))])
+                            data_lst.append(data[list(range(count, count + n_channel))])
                         count += n_channel
                     data = torch.from_numpy(np.vstack(data_lst)).contiguous().float()
 
@@ -730,3 +747,79 @@ class PatchBasedPredictor(object):
         return self.predict_from_data_iterator(
             data_iterator, preprocess_config, save_or_return_probabilities
         )
+
+
+if __name__ == "__main__":
+    import SimpleITK as sitk
+    from wcode.utils.file_operations import open_yaml
+
+    predict_configs = {
+        "dataset_name": "HNTSMRG2024mid",
+        "modality": [0, 1, 2],
+        "fold": 0,
+        "split": "val",
+        "original_img_folder": "./Dataset/HNTSMRG2024mid/images",
+        "predictions_save_folder": "./Predictions/HNTSMRG2024mid",
+        "model_path": "./Logs/HNTSMRG2024mid/HNTSMRG2024mid_oversample/fold_0/checkpoint_latest.pth",
+        "device": {"gpu": [0]},
+        "overwrite": True,
+        "save_probabilities": False,
+        "patch_size": [56, 224, 160],
+        "tile_step_size": 0.5,
+        "use_gaussian": True,
+        "perform_everything_on_gpu": True,
+        "use_mirroring": False,
+        "allowed_mirroring_axes": None,
+        "num_processes": 16,
+    }
+    config_dict = open_yaml("./Configs/HNTSMRG2024mid_oversample.yaml")
+    config_dict["Inferring_settings"] = predict_configs
+    pre = PatchBasedPredictor(config_dict, allow_tqdm=True)
+    pred = pre.predict_single_npy_array(
+        [
+            "./Dataset/HNTSMRG2024mid/images/HNTSMRG2024mid_0003_0000.nii.gz",
+            "./Dataset/HNTSMRG2024mid/images/HNTSMRG2024mid_0003_0001.nii.gz",
+            "./Dataset/HNTSMRG2024mid/images/HNTSMRG2024mid_0003_0002.nii.gz",
+        ],
+        "3d",
+    )
+    pred_obj = sitk.GetImageFromArray(pred)
+    pred_obj.CopyInformation(
+        sitk.ReadImage(
+            "./Dataset/HNTSMRG2024mid/images/HNTSMRG2024mid_0003_0002.nii.gz"
+        )
+    )
+    sitk.WriteImage(pred_obj, "./prediction.nii.gz")
+
+    # predict_configs = {
+    #     "dataset_name": "HNTSMRG2024pre",
+    #     "modality": [0],
+    #     "fold": 0,
+    #     "split": "val",
+    #     "original_img_folder": "./Dataset/HNTSMRG2024pre/images",
+    #     "predictions_save_folder": "./Predictions/HNTSMRG2024pre",
+    #     "model_path": "./Logs/HNTSMRG2024pre/HNTSMRG2024pre_oversample/fold_0/checkpoint_final.pth",
+    #     "device": {"gpu": [3]},
+    #     "overwrite": True,
+    #     "save_probabilities": False,
+    #     "patch_size": [56, 224, 160],
+    #     "tile_step_size": 0.5,
+    #     "use_gaussian": True,
+    #     "perform_everything_on_gpu": True,
+    #     "use_mirroring": False,
+    #     "allowed_mirroring_axes": None,
+    #     "num_processes": 16,
+    # }
+    # config_dict = open_yaml("./Configs/HNTSMRG2024pre_oversample.yaml")
+    # config_dict["Inferring_settings"] = predict_configs
+    # pre = PatchBasedPredictor(config_dict, allow_tqdm=True)
+    # pred = pre.predict_single_npy_array(
+    #     ["./Dataset/HNTSMRG2024mid/images/HNTSMRG2024mid_0003_0000.nii.gz"], "3d"
+    # )
+    # pred_obj = sitk.GetImageFromArray(pred)
+    # pred_obj.CopyInformation(
+    #     sitk.ReadImage(
+    #         "./Dataset/HNTSMRG2024mid/images/HNTSMRG2024mid_0003_0000.nii.gz"
+    #     )
+    # )
+    # sitk.WriteImage(pred_obj, "./prediction.nii.gz")

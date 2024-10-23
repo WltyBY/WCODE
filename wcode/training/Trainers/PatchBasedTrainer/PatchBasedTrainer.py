@@ -415,6 +415,7 @@ class PatchBasedTrainer(object):
 
     def worker_init_fn(self, worker_id):
         random.seed(self.random_seed + worker_id)
+        np.random.seed(self.random_seed + worker_id)
 
     def get_train_and_val_dataloader(self):
         train_collator, val_collator = self.get_collator()
@@ -440,6 +441,7 @@ class PatchBasedTrainer(object):
             num_workers=self.num_processes,
             pin_memory=True,
             persistent_workers=True,
+            worker_init_fn=self.worker_init_fn,
             collate_fn=val_collator,
             drop_last=False,
         )
@@ -776,7 +778,7 @@ class PatchBasedTrainer(object):
             "tile_step_size": 0.5,
             "use_gaussian": True,
             "perform_everything_on_gpu": True,
-            "use_mirroring": True,
+            "use_mirroring": False,
             "allowed_mirroring_axes": [0, 1] if self.natural_image_flag else [1, 2],
             "num_processes": self.num_processes,
         }
@@ -827,7 +829,7 @@ class PatchBasedTrainer(object):
             predictor = NaturalImagePredictor(
                 self.config_dict, allow_tqdm=True, verbose=False
             )
-            self.print_to_log_file("Start predicting.")
+            self.print_to_log_file("Start predicting using NaturalImagePredictor.")
             start = time()
             predictor.predict_from_data_iterator(
                 data_iterator=iter_lst,
@@ -839,7 +841,7 @@ class PatchBasedTrainer(object):
             predictor = PatchBasedPredictor(
                 self.config_dict, allow_tqdm=True, verbose=False
             )
-            self.print_to_log_file("Start predicting.")
+            self.print_to_log_file("Start predicting using PatchBasedPredictor.")
             start = time()
             predictor.predict_from_data_iterator(
                 data_iterator=iter_lst,

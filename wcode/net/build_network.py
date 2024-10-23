@@ -1,19 +1,22 @@
 from wcode.net.CNN.VNet.VNet import VNet
 from wcode.net.CNN.UNet.UNet import UNet
 from wcode.net.CNN.ResUNet.ResUNet import ResUNet
+from wcode.net.CNN.DFUNet.DFUNet import DFUNet
 from wcode.net.CNN.STUNet.STUNet import build_STUNet
 from wcode.net.Vision_Transformer.SAM.build_sam import sam_model_registry
 from wcode.inferring.utils.load_pretrain_weight import load_pretrained_weights
 
 
 def build_network(network_settings: dict):
-    if network_settings["label"].lower() in ["vnet", "unet", "resunet"]:
+    if network_settings["label"].lower() in ["vnet", "unet", "resunet", "dfunet"]:
         if network_settings["label"].lower() == "vnet":
             network_class = VNet
         elif network_settings["label"].lower() == "unet":
             network_class = UNet
         elif network_settings["label"].lower() == "resunet":
             network_class = ResUNet
+        elif network_settings["label"].lower() == "dfunet":
+            network_class = DFUNet
         else:
             raise Exception("Unsupported network class.")
         
@@ -25,7 +28,6 @@ def build_network(network_settings: dict):
             return load_pretrained_weights(
                 network_class(network_settings),
                 network_settings["weight_path"],
-                verbose=False,
             )
         else:
             return network_class(network_settings)

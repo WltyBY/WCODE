@@ -17,7 +17,7 @@ from wcode.utils.NDarray_operations import (
 )
 
 # mid or pre
-dataset_kind = "pre"
+dataset_kind = "mid"
 num_processes = 16
 if dataset_kind == "pre":
     files_lst = {"data": ["_preRT_T2.nii.gz"], "mask": ["_preRT_mask.nii.gz"]}

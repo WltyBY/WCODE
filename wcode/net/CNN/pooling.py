@@ -14,6 +14,7 @@ class ConvDownPool(nn.Module):
         pool_kernel_size=(2, 2, 2),
         normalization="batchnorm",
         activate="leakyrelu",
+        need_bias=True,
     ):
         super(ConvDownPool, self).__init__()
         assert len(pool_kernel_size) == dim
@@ -28,7 +29,7 @@ class ConvDownPool(nn.Module):
                 out_channels,
                 kernel_size=pool_kernel_size,
                 stride=pool_kernel_size,
-                bias=False,
+                bias=need_bias,
             ),
             Norm_layer(out_channels, affine=True),
             Activate_layer(),
@@ -48,6 +49,7 @@ class ConvUpPool(nn.Module):
         pool_kernel_size=(2, 2, 2),
         normalization="batchnorm",
         activate="leakyrelu",
+        need_bias=True,
     ):
         super(ConvUpPool, self).__init__()
         assert len(pool_kernel_size) == dim
@@ -67,7 +69,7 @@ class ConvUpPool(nn.Module):
                 out_channels,
                 kernel_size=pool_kernel_size,
                 stride=pool_kernel_size,
-                bias=False,
+                bias=need_bias,
             ),
             Norm_layer(out_channels, affine=True),
             Activate_layer(),

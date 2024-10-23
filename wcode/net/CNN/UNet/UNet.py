@@ -17,6 +17,7 @@ class DownBlock(nn.Module):
         down_scale_factor,
         normalization,
         activate,
+        need_bias,
     ):
         super(DownBlock, self).__init__()
 
@@ -30,6 +31,7 @@ class DownBlock(nn.Module):
             padding_size=[(p - 1) // 2 for p in kernel_size],
             normalization=normalization,
             activate=activate,
+            need_bias=need_bias,
         )
 
         if len(kernel_size) == 2:
@@ -56,6 +58,7 @@ class UpBlock(nn.Module):
         up_scale_factor,
         normalization,
         activate,
+        need_bias,
     ):
         super(UpBlock, self).__init__()
         self.uppool = ConvUpPool(
@@ -65,6 +68,7 @@ class UpBlock(nn.Module):
             pool_kernel_size=up_scale_factor,
             normalization=normalization,
             activate=activate,
+            need_bias=need_bias,
         )
 
         self.conv = ConvBlock(
@@ -77,6 +81,7 @@ class UpBlock(nn.Module):
             padding_size=[(p - 1) // 2 for p in kernel_size],
             normalization=normalization,
             activate=activate,
+            need_bias=need_bias,
         )
         Activate_layer = ACTIVATE_LAYER[activate.lower()]
         self.activate_layer = Activate_layer()
@@ -99,6 +104,7 @@ class Encoder(nn.Module):
         self.pool_kernel_size = self.params["pool_kernel_size"]
         self.normalization = self.params["normalization"]
         self.activate = self.params["activate"]
+        self.need_bias = self.params["need_bias"]
 
         self.Encoder_layers = nn.ModuleList()
         for i in range(len(self.num_conv_per_stage) - 1):
@@ -112,6 +118,7 @@ class Encoder(nn.Module):
                     down_scale_factor=self.pool_kernel_size[i],
                     normalization=self.normalization,
                     activate=self.activate,
+                    need_bias=self.need_bias,
                 )
             )
 
@@ -125,6 +132,7 @@ class Encoder(nn.Module):
             padding_size=[(p - 1) // 2 for p in self.kernel_size[-1]],
             normalization=self.normalization,
             activate=self.activate,
+            need_bias=self.need_bias,
         )
 
     def forward(self, inputs):
@@ -147,6 +155,7 @@ class Decoder(nn.Module):
         self.num_conv_per_stage = self.params["num_conv_per_stage"]
         self.normalization = self.params["normalization"]
         self.activate = self.params["activate"]
+        self.need_bias = self.params["need_bias"]
 
         self.output_features = output_features
 
@@ -163,6 +172,7 @@ class Decoder(nn.Module):
                     up_scale_factor=self.pool_kernel_size[i],
                     normalization=self.normalization,
                     activate=self.activate,
+                    need_bias=self.need_bias,
                 )
             )
 
@@ -206,12 +216,14 @@ class UNet(nn.Module):
         if self.deep_supervision:
             self.prediction_head = nn.ModuleList()
             # we will not do deep supervision on the prediction of bottleneck output feature
+            # the prediction_heads are from low to high resolution.
             for i in range(1, len(self.encoder_params["num_conv_per_stage"])):
                 self.prediction_head.append(
                     Conv_layer(
                         self.decoder_params["features"][i],
                         params["out_channels"],
                         kernel_size=1,
+                        bias=params["need_bias"],
                     )
                 )
         else:
@@ -219,6 +231,7 @@ class UNet(nn.Module):
                 self.decoder_params["features"][-1],
                 params["out_channels"],
                 kernel_size=1,
+                bias=params["need_bias"],
             )
 
     def forward(self, inputs):
@@ -254,6 +267,7 @@ class UNet(nn.Module):
         encoder_params["pool_kernel_size"] = params["pool_kernel_size"]
         encoder_params["normalization"] = params["normalization"]
         encoder_params["activate"] = params["activate"]
+        encoder_params["need_bias"] = params["need_bias"]
 
         assert (
             len(encoder_params["features"])
@@ -270,7 +284,7 @@ class UNet(nn.Module):
         decoder_params["num_conv_per_stage"] = params["num_conv_per_stage"][::-1]
         decoder_params["normalization"] = params["normalization"]
         decoder_params["activate"] = params["activate"]
-        decoder_params["out_channels"] = params["out_channels"]
+        decoder_params["need_bias"] = params["need_bias"]
 
         return encoder_params, decoder_params
 

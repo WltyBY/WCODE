@@ -33,7 +33,7 @@ class Preprocessor(object):
         random.seed(random_seed)
         np.random.seed(random_seed)
         os.environ["PYTHONHASHSEED"] = str(random_seed)
-
+        
         if dataset_name:
             self.dataset_figureprint = open_json(
                 os.path.join(
@@ -104,11 +104,14 @@ class Preprocessor(object):
         old_shape = data.shape[1:]
         new_shape = compute_new_shape(old_shape, original_spacing, target_spacing)
         data = resample_npy_with_channels_on_spacing(
-            data, original_spacing, target_spacing, is_seg=False
+            data,
+            original_spacing,
+            target_spacing,
+            channel_names=self.dataset_yaml["channel_names"].values(),
         )
         if seg is not None:
             seg = resample_npy_with_channels_on_spacing(
-                seg, original_spacing, target_spacing, is_seg=True
+                seg, original_spacing, target_spacing, channel_names=["label"]
             )
 
         if self.verbose:
@@ -174,7 +177,9 @@ class Preprocessor(object):
             if not self.general_img_flag:
                 seg, _ = self.img_Reader(seg_file)
             else:
-                seg = cv2.cvtColor(cv2.imread(seg_file[0]), cv2.COLOR_BGR2RGB).transpose(2, 0, 1)
+                seg = cv2.cvtColor(
+                    cv2.imread(seg_file[0]), cv2.COLOR_BGR2RGB
+                ).transpose(2, 0, 1)
         else:
             seg = None
 
@@ -271,7 +276,8 @@ class Preprocessor(object):
             if len(all_locs) != 0:
                 target_num_samples = min(num_samples, len(all_locs))
                 target_num_samples = max(
-                    target_num_samples, int(np.ceil(len(all_locs) * min_percent_coverage))
+                    target_num_samples,
+                    int(np.ceil(len(all_locs) * min_percent_coverage)),
                 )
 
                 rndst = np.random.RandomState(seed)
@@ -359,11 +365,17 @@ class Preprocessor(object):
                 for i in identifiers
             ]
 
-            gt_segmentation_path = os.path.join("./Dataset_preprocessed", self.dataset_name, "gt_segmentations")
+            gt_segmentation_path = os.path.join(
+                "./Dataset_preprocessed", self.dataset_name, "gt_segmentations"
+            )
             if os.path.isdir(gt_segmentation_path):
                 shutil.rmtree(gt_segmentation_path, ignore_errors=True)
             os.makedirs(gt_segmentation_path, exist_ok=True)
-            shutil.copytree(os.path.join("./Dataset", self.dataset_name, "labels"), gt_segmentation_path, dirs_exist_ok=True)
+            shutil.copytree(
+                os.path.join("./Dataset", self.dataset_name, "labels"),
+                gt_segmentation_path,
+                dirs_exist_ok=True,
+            )
         elif {"imagesTr", "labelsTr", "imagesVal", "labelsVal"}.issubset(folder_lst):
             image_fnames_train = create_lists_from_splitted_dataset_folder(
                 os.path.join("./Dataset", self.dataset_name, "imagesTr"),
@@ -394,12 +406,22 @@ class Preprocessor(object):
             image_fnames = image_fnames_train + image_fnames_val
             seg_fnames = seg_fnames_train + seg_fnames_val
 
-            gt_segmentation_path = os.path.join("./Dataset_preprocessed", self.dataset_name, "gt_segmentations")
+            gt_segmentation_path = os.path.join(
+                "./Dataset_preprocessed", self.dataset_name, "gt_segmentations"
+            )
             if os.path.isdir(gt_segmentation_path):
                 shutil.rmtree(gt_segmentation_path, ignore_errors=True)
             os.makedirs(gt_segmentation_path, exist_ok=True)
-            shutil.copytree(os.path.join("./Dataset", self.dataset_name, "labelsTr"), gt_segmentation_path, dirs_exist_ok=True)
-            shutil.copytree(os.path.join("./Dataset", self.dataset_name, "labelsVal"), gt_segmentation_path, dirs_exist_ok=True)
+            shutil.copytree(
+                os.path.join("./Dataset", self.dataset_name, "labelsTr"),
+                gt_segmentation_path,
+                dirs_exist_ok=True,
+            )
+            shutil.copytree(
+                os.path.join("./Dataset", self.dataset_name, "labelsVal"),
+                gt_segmentation_path,
+                dirs_exist_ok=True,
+            )
 
         # multiprocessing magic.
         r = []

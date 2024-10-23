@@ -38,11 +38,11 @@ def dataset_split(
             case_lst, round(num_cases * (split_rate[2] / np.sum(split_rate)))
         )
 
-        train_and_val_cases = np.setdiff1d(case_lst, test_cases)
+        train_and_val_cases = list(np.setdiff1d(case_lst, test_cases))
         val_cases = random.sample(
             train_and_val_cases, round(num_cases * (split_rate[1] / np.sum(split_rate)))
         )
-        train_cases = np.setdiff1d(train_and_val_cases, val_cases)
+        train_cases = list(np.setdiff1d(train_and_val_cases, val_cases))
 
         for i in range(num_fold):
             fold_cases_dict["fold" + str(i)] = {}

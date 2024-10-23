@@ -11,6 +11,7 @@ from wcode.preprocessing.preprocessor import Preprocessor
 
 def preprocess_fromfiles_save_to_queue(
     images_dict: dict,
+    modality: list,
     preprocess_config: str,
     predictions_save_folder: str,
     dataset_name: str,
@@ -21,8 +22,15 @@ def preprocess_fromfiles_save_to_queue(
 ):
     try:
         preprocessor = Preprocessor(dataset_name=dataset_name, verbose=verbose)
+        preprocessor.dataset_yaml["channel_names"] = {
+            key: value
+            for key, value in preprocessor.dataset_yaml["channel_names"].items()
+            if int(key) in modality
+        }
         for key in images_dict.keys():
-            data, _, data_properites = preprocessor.run_case(images_dict[key], None, preprocess_config)
+            data, _, data_properites = preprocessor.run_case(
+                images_dict[key], None, preprocess_config
+            )
 
             data = torch.from_numpy(data).contiguous().float()
 
@@ -48,6 +56,7 @@ def preprocess_fromfiles_save_to_queue(
 
 def preprocessing_iterator_fromfiles(
     images_dict: dict,
+    modality: list,
     preprocess_config: str,
     predictions_save_folder: str,
     dataset_name: str,
@@ -71,6 +80,7 @@ def preprocessing_iterator_fromfiles(
             target=preprocess_fromfiles_save_to_queue,
             args=(
                 single_work_img_dict,
+                modality,
                 preprocess_config,
                 predictions_save_folder,
                 dataset_name,
