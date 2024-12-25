@@ -1,56 +1,85 @@
 import numpy as np
-import matplotlib.pyplot as plt
 
-from wcode.utils.file_operations import open_json
+from wcode.utils.file_operations import open_json, save_json
+from wcode.utils.json_export import recursive_fix_for_json_export
 
 if __name__ == "__main__":
-    file_path_lst = ["./summary_0.json", "./summary_1.json", "./summary_whole.json"]
+    file_path_lst = [
+        "./Predictions/RAOSset3/fold0/summary.json",
+        "./Predictions/RAOSset3/fold1/summary.json",
+        "./Predictions/RAOSset3/fold2/summary.json",
+        "./Predictions/RAOSset3/fold3/summary.json",
+        "./Predictions/RAOSset3/fold4/summary.json",
+    ]
 
-    DSC_lst_1_all = []
-    DSC_lst_2_all = []
+    results = {}
+    having_results = {}
+    Hallucinations = {}
     for file_path in file_path_lst:
         summary = open_json(file_path)
-        # a list
+
         cases_results = summary["metric_per_case"]
-        DSC_lst_1 = []
-        DSC_lst_2 = []
-        case_name_lst = []
         for case in cases_results:
             # case is a dict
-            DSC_lst_1.append(case["metrics"]["1"]["Dice"])
-            DSC_lst_2.append(case["metrics"]["2"]["Dice"])
-            case_name_lst.append(
-                case["reference_file"].split("/")[-1].split(".")[0].split("_")[1]
+            for key in cases_results[case].keys():
+                key = int(key)
+                if not results.__contains__(key):
+                    results[key] = dict()
+                    having_results[key] = dict()
+                    Hallucinations[key] = {
+                        "num_of_case": 0,
+                        "num_of_case_have_hallucinations": 0,
+                    }
+                    for metric in cases_results[case][str(key)].keys():
+                        results[key][metric] = []
+                        having_results[key][metric] = []
+
+                for metric in results[key].keys():
+                    results[key][metric].append(cases_results[case][str(key)][metric])
+
+                    if cases_results[case][str(key)]["n_gt"] != 0:
+                        having_results[key][metric].append(
+                            cases_results[case][str(key)][metric]
+                        )
+
+                if cases_results[case][str(key)]["n_gt"] == 0:
+                    Hallucinations[key]["num_of_case"] += 1
+
+                if (
+                    cases_results[case][str(key)]["n_gt"] == 0
+                    and cases_results[case][str(key)]["n_pred"] != 0
+                ):
+                    Hallucinations[key]["num_of_case_have_hallucinations"] += 1
+
+    for class_name in results.keys():
+        results[class_name]["DSC_agg"] = (2 * np.sum(results[class_name]["TP"])) / (
+            np.sum(results[class_name]["n_gt"]) + np.sum(results[class_name]["n_pred"])
+        )
+        for metric in results[class_name].keys():
+            if metric == "DSC_agg":
+                continue
+            results[class_name][metric] = "{:f}+{:f}".format(
+                np.nanmean(results[class_name][metric]),
+                np.nanstd(results[class_name][metric]),
             )
-        DSC_lst_1_all.append(DSC_lst_1)
-        DSC_lst_2_all.append(DSC_lst_2)
+            having_results[class_name][metric] = "{:f}+{:f}".format(
+                np.nanmean(having_results[class_name][metric]),
+                np.nanstd(having_results[class_name][metric]),
+            )
+        if Hallucinations[class_name]["num_of_case"] != 0:
+            Hallucinations[class_name]["hallucinations_rate"] = (
+                Hallucinations[class_name]["num_of_case_have_hallucinations"]
+                / Hallucinations[class_name]["num_of_case"]
+            )
+        else:
+            Hallucinations[class_name]["hallucinations_rate"] = np.nan
 
-        print(np.std(DSC_lst_1))
-        print(np.std(DSC_lst_2))
-
-    x = np.arange(len(case_name_lst))  # the label locations
-    width = 0.3  # the width of the bars
-    fig, ax = plt.subplots(figsize=(30, 10))
-    rects1 = ax.bar(x - width, DSC_lst_1_all[0], width, label="CT")
-    rects2 = ax.bar(x, DSC_lst_1_all[1], width, label="Enhanced_CT")
-    rects3 = ax.bar(x + width, DSC_lst_1_all[2], width, label="CT+Enhanced_CT")
-    ax.set_ylabel("DSC")
-    ax.set_title("GTVnd")
-    ax.set_xticks(x)
-    ax.set_xticklabels(case_name_lst)
-    ax.legend()
-
-    plt.savefig("./nnUNet_GTVnd.svg", dpi=600, format="svg", pad_inches=0.0)
-    plt.close()
-
-    fig, ax = plt.subplots(figsize=(30, 10))
-    rects1 = ax.bar(x - width, DSC_lst_2_all[0], width, label="CT")
-    rects2 = ax.bar(x, DSC_lst_2_all[1], width, label="Enhanced_CT")
-    rects3 = ax.bar(x + width, DSC_lst_2_all[2], width, label="CT+Enhanced_CT")
-    ax.set_ylabel("DSC")
-    ax.set_title("GTVp")
-    ax.set_xticks(x)
-    ax.set_xticklabels(case_name_lst)
-    ax.legend()
-
-    plt.savefig("./nnUNet_GTVp.svg", dpi=600, format="svg", pad_inches=0.0)
+    recursive_fix_for_json_export(results)
+    recursive_fix_for_json_export(having_results)
+    recursive_fix_for_json_export(Hallucinations)
+    summary = {
+        "results": results,
+        "results_with_positive_case": having_results,
+        "Hallucinations": Hallucinations,
+    }
+    save_json(summary, "./summary_analysis.json")

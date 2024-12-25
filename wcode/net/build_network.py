@@ -19,16 +19,19 @@ def build_network(network_settings: dict):
             network_class = DFUNet
         else:
             raise Exception("Unsupported network class.")
-        
+
         if (
             network_settings.__contains__("weight_path")
             and network_settings["weight_path"] is not None
         ):
+            net = network_class(network_settings)
             print("Loading weight from:", network_settings["weight_path"])
-            return load_pretrained_weights(
-                network_class(network_settings),
+            load_pretrained_weights(
+                net,
                 network_settings["weight_path"],
+                verbose=True,
             )
+            return net
         else:
             return network_class(network_settings)
     elif network_settings["label"].lower() == "stunet":

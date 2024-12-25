@@ -53,7 +53,10 @@ def get_human_region_mask_one_channel(img, threshold=-600):
     return fg
 
 
-def create_mask_base_on_human_body(data):
+def create_mask_base_on_human_body(data, threshold=-600):
+    """
+    data in (c, z, y, x)
+    """
     assert (
         len(data.shape) == 4 or len(data.shape) == 3
     ), "data must have shape (C, X, Y, Z) or shape (C, X, Y)"
@@ -61,7 +64,7 @@ def create_mask_base_on_human_body(data):
     mask = np.zeros(data.shape[1:], dtype=bool)
     for c in range(data.shape[0]):
         # each channel
-        this_mask = get_human_region_mask_one_channel(data[c])
+        this_mask = get_human_region_mask_one_channel(data[c], threshold)
         mask = mask | this_mask
     mask = ndimage.binary_fill_holes(mask)
     return mask
@@ -85,7 +88,7 @@ def create_mask_base_on_threshold(data, threshold=None):
 
 
 def crop_to_mask(data, seg=None, crop_fun_args={}, create_mask=create_mask_base_on_threshold):
-    data_nonzero_mask = create_mask(data, *crop_fun_args)
+    data_nonzero_mask = create_mask(data, **crop_fun_args)
     data_bbmin, data_bbmax = get_ND_bounding_box(data_nonzero_mask)
 
     if seg is not None:

@@ -54,7 +54,6 @@ class NaturalImagePredictor(object):
                 "./Dataset_preprocessed", self.dataset_name, "dataset_split.json"
             )
         )
-        self.initialize()
 
     def get_inferring_settings(self, inferring_setting_dict):
         self.dataset_name = inferring_setting_dict["dataset_name"]
@@ -100,7 +99,9 @@ class NaturalImagePredictor(object):
         return device
 
     def initialize(self):
-        if not os.path.exists(self.predictions_save_folder):
+        if self.predictions_save_folder is not None and not os.path.exists(
+            self.predictions_save_folder
+        ):
             os.makedirs(self.predictions_save_folder)
 
         self.num_segmentation_heads = self.config_dict["Network"]["out_channels"]
@@ -112,6 +113,12 @@ class NaturalImagePredictor(object):
         self.network.to(self.device)
 
         print("Compiling network...")
+        self.network = torch.compile(self.network)
+    
+    def manual_initialize(self, network):
+        self.num_segmentation_heads = self.config_dict["Network"]["out_channels"]
+        self.network = network
+        self.network.to(self.device)
         self.network = torch.compile(self.network)
 
     def get_networks(self, network_settings: Dict):
@@ -606,4 +613,3 @@ class NaturalImagePredictor(object):
             save_vis_mask,
             save_or_return_probabilities,
         )
-

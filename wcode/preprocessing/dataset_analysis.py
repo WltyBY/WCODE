@@ -125,7 +125,18 @@ class DatasetFingerprintExtractor(object):
         intensity_statistics_per_channel = []
 
         # segmentation is 4d: 1,x,y,z. We need to remove the empty dimension for the following code to work
-        foreground_mask = segmentation[0] > 0
+        having_classes_dict = dataset_yaml["labels"]
+        foreground_mask = np.zeros_like(segmentation[0], dtype=bool)
+        for class_name, class_values in having_classes_dict.items():
+            if (
+                any(
+                    True if s in class_name.lower() else False
+                    for s in ["unlabel", "ignore"]
+                )
+                or class_values <= 0
+            ):
+                continue
+            foreground_mask |= segmentation[0] == class_values
 
         # len(images) means the number of channels
         for i in range(len(images)):
@@ -205,7 +216,11 @@ class DatasetFingerprintExtractor(object):
                 foreground_intensities_per_channel,
                 foreground_intensity_stats_per_channel,
             ) = DatasetFingerprintExtractor.collect_foreground_intensities(
-                seg_cropped, data_cropped, self.dataset_yaml, seed=seed, num_samples=num_samples
+                seg_cropped,
+                data_cropped,
+                self.dataset_yaml,
+                seed=seed,
+                num_samples=num_samples,
             )
 
             spacing = properties_image["spacing"]
@@ -444,7 +459,9 @@ class DatasetFingerprintExtractor(object):
                         True if s in channels_name[i] else False
                         for s in ["mask", "label", "seg"]
                     ):
-                        intensity_statistics_per_channel[i] = {"IS_SEG": "Nothing needs to say here."}
+                        intensity_statistics_per_channel[i] = {
+                            "IS_SEG": "Nothing needs to say here."
+                        }
                         continue
                     percentile_00_5, median, percentile_99_5 = np.percentile(
                         foreground_intensities_per_channel[i], percentiles
@@ -455,7 +472,8 @@ class DatasetFingerprintExtractor(object):
                         "std": float(np.std(foreground_intensities_per_channel[i])),
                         "min": float(np.min(foreground_intensities_per_channel[i])),
                         "max": float(np.max(foreground_intensities_per_channel[i])),
-                        "percentile_99_5": float(percentile_99_5),                        "percentile_00_5": float(percentile_00_5),
+                        "percentile_99_5": float(percentile_99_5),
+                        "percentile_00_5": float(percentile_00_5),
                     }
 
                 fingerprint = {

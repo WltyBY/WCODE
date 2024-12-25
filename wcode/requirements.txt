@@ -1,6 +1,5 @@
 acvl_utils
 matplotlib
-monai
 numpy<2.0
 PyYAML
 scipy
@@ -11,3 +10,6 @@ tqdm
 opencv-python
 shapely
 scikit-image
+fft_conv_pytorch
+pydicom=1.2.1
+dcmrtstruct2nii

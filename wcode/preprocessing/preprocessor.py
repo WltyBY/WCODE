@@ -271,8 +271,10 @@ class Preprocessor(object):
         min_percent_coverage = 0.01
         selected_dict = {}
 
-        for i in range(1, len(self.dataset_yaml["labels"])):
-            all_locs = np.argwhere(seg[0] != i)
+        for class_name, class_value in self.dataset_yaml["labels"].items():
+            if any(True if s in class_name.lower() else False for s in ["unlabel", "ignore"]):
+                continue
+            all_locs = np.argwhere(seg[0] == class_value)
             if len(all_locs) != 0:
                 target_num_samples = min(num_samples, len(all_locs))
                 target_num_samples = max(
@@ -284,9 +286,9 @@ class Preprocessor(object):
                 selected = all_locs[
                     rndst.choice(len(all_locs), target_num_samples, replace=False)
                 ]
-                selected_dict[i] = selected
+                selected_dict[class_value] = selected
             else:
-                selected_dict[i] = "No_fg_point"
+                selected_dict[class_value] = "No_fg_point"
 
         return selected_dict
 

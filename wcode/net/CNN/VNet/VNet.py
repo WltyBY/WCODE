@@ -170,9 +170,9 @@ class Decoder(nn.Module):
                     in_channels=features[i],
                     upsample_out_channels=features[i + 1],
                     conv_out_channels=features[i + 1],
-                    dropout_p=self.dropout_p[i],
-                    num_conv=self.num_conv_per_stage[i],
-                    kernel_size=self.kernel_size[i],
+                    dropout_p=self.dropout_p[i + 1],
+                    num_conv=self.num_conv_per_stage[i + 1],
+                    kernel_size=self.kernel_size[i + 1],
                     up_scale_factor=self.pool_kernel_size[i],
                     normalization=self.normalization,
                     activate=self.activate,
@@ -308,7 +308,14 @@ if __name__ == "__main__":
         inputs = torch.rand((16, 1, 256, 256)).to(device)
         outputs = vnet2d(inputs)
     print("Time:", time.time() - begin)
-    print("Outputs:")
+    print("Outputs features:")
+    if isinstance(outputs["feature"], (list, tuple)):
+        for output in outputs["feature"]:
+            print(output.shape)
+    else:
+        print(outputs["feature"].shape)
+
+    print("Outputs prediction:")
     if isinstance(outputs["pred"], (list, tuple)):
         for output in outputs["pred"]:
             print(output.shape)
@@ -324,7 +331,14 @@ if __name__ == "__main__":
         inputs = torch.rand((2, 1, 16, 256, 256)).to(device)
         outputs = vnet3d(inputs)
     print("Time:", time.time() - begin)
-    print("Outputs:")
+    print("Outputs features:")
+    if isinstance(outputs["feature"], (list, tuple)):
+        for output in outputs["feature"]:
+            print(output.shape)
+    else:
+        print(outputs["feature"].shape)
+
+    print("Outputs prediction:")
     if isinstance(outputs["pred"], (list, tuple)):
         for output in outputs["pred"]:
             print(output.shape)

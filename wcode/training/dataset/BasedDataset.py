@@ -1,4 +1,5 @@
 import os
+import torch
 import numpy as np
 
 from torch.utils.data import Dataset
@@ -8,7 +9,6 @@ from wcode.utils.data_io import files_ending_for_2d_img, files_ending_for_sitk
 
 
 class BasedDataset(Dataset):
-
     def __init__(
         self,
         dataset_name,
@@ -16,10 +16,12 @@ class BasedDataset(Dataset):
         split="train",
         fold="fold0",
         modality=None,
+        transform=None,
     ):
         self.dataset_name = dataset_name
         self.split = split
         self.modality = modality
+        self.transform = transform
         assert isinstance(self.modality, list)
 
         split_json_path = os.path.join(
@@ -90,6 +92,18 @@ class BasedDataset(Dataset):
                 "image": data_dict["data"][self.modality],
                 "label": data_dict["seg"],
             }
+        
+        if self.transform is not None:
+            sample["image"] = torch.from_numpy(sample["image"]).float()
+            sample["label"] = torch.from_numpy(sample["label"]).to(torch.int16)
+            output_dict = {"image": [], "label": []}
+            for i in range(sample["image"].shape[0]):
+                sample_data = {"image": sample["image"][i], "label": sample["label"][i]}
+                sample_data = self.transform(**sample_data)
+                output_dict["image"].append(sample_data["image"])
+                output_dict["label"].append(sample_data["label"])
+            sample["image"] = torch.stack(output_dict["image"])
+            sample["label"] = torch.stack(output_dict["label"])
 
         sample["idx"] = case
         sample["property"] = property_dict

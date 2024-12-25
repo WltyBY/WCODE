@@ -47,24 +47,23 @@ class PatchBasedPredictor(object):
         self.allow_tqdm = allow_tqdm
         self.verbose = verbose
 
-        self.dataset_yaml = open_yaml(
-            os.path.join("./Dataset_preprocessed", self.dataset_name, "dataset.yaml")
-        )
         self.dataset_yaml["channel_names"] = {
             key: value
             for key, value in self.dataset_yaml["channel_names"].items()
             if int(key) in self.modality
         }
-        
+
         self.dataset_split = open_json(
             os.path.join(
                 "./Dataset_preprocessed", self.dataset_name, "dataset_split.json"
             )
         )
-        self.initialize()
 
     def get_inferring_settings(self, inferring_setting_dict):
         self.dataset_name = inferring_setting_dict["dataset_name"]
+        self.dataset_yaml = open_yaml(
+            os.path.join("./Dataset_preprocessed", self.dataset_name, "dataset.yaml")
+        )
         self.modality = inferring_setting_dict["modality"]
         if self.modality == None or self.modality == "all":
             self.modality = [
@@ -111,7 +110,9 @@ class PatchBasedPredictor(object):
         return device
 
     def initialize(self):
-        if not os.path.exists(self.predictions_save_folder):
+        if self.predictions_save_folder is not None and not os.path.exists(
+            self.predictions_save_folder
+        ):
             os.makedirs(self.predictions_save_folder)
 
         self.num_segmentation_heads = self.config_dict["Network"]["out_channels"]
@@ -124,6 +125,11 @@ class PatchBasedPredictor(object):
 
         print("Compiling network...")
         self.network = torch.compile(self.network)
+    
+    def manual_initialize(self, network):
+        self.num_segmentation_heads = self.config_dict["Network"]["out_channels"]
+        self.network = network
+        self.network.to(self.device)
 
     def get_networks(self, network_settings: Dict):
         if "need_features" in network_settings.keys():
@@ -169,8 +175,7 @@ class PatchBasedPredictor(object):
                 )
             )
         else:
-            name_length = len(self.dataset_name) + 5
-            identifier = list(set([i[:name_length] for i in file_lst]))
+            identifier = list(set([i[:-checking_length] for i in file_lst]))
 
         # get needed files' path
         for i in identifier:
@@ -324,7 +329,7 @@ class PatchBasedPredictor(object):
             len(self.patch_size) == 3
         ), "The patch size in 3D prediction for 3D volume should have 3 elements."
         assert isinstance(input_image, torch.Tensor)
-
+        
         self.network.eval()
         empty_cache(self.device)
 
@@ -399,8 +404,10 @@ class PatchBasedPredictor(object):
                         )
                 finally:
                     empty_cache(self.device)
-
-                print("running prediction")
+                    
+                if self.verbose:
+                    print("running prediction")
+                    
                 for sl in tqdm(slicers, disable=not self.allow_tqdm):
                     workon = data[sl][None]
                     workon = workon.to(self.device, non_blocking=False)

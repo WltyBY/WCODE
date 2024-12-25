@@ -4,6 +4,7 @@ import warnings
 from torch import nn
 
 from wcode.training.loss.diceloss import TverskyLoss
+from wcode.training.loss.entropyloss import RobustCrossEntropyLoss
 
 
 class Tversky_and_CE_loss(nn.Module):
@@ -23,7 +24,7 @@ class Tversky_and_CE_loss(nn.Module):
         self.weight_ce = weight_ce
         self.ignore_label = ignore_label
 
-        self.ce = nn.CrossEntropyLoss(**ce_kwargs)
+        self.ce = RobustCrossEntropyLoss(**ce_kwargs)
         self.tverskyloss = TverskyLoss(**tversky_kwargs)
 
     def forward(self, net_output: torch.Tensor, target: torch.Tensor):
@@ -54,7 +55,7 @@ class Tversky_and_CE_loss(nn.Module):
             else 0
         )
         ce_loss = (
-            self.ce(net_output, target[:, 0].long())
+            self.ce(net_output, target)
             if self.weight_ce != 0 and (self.ignore_label is None or num_fg > 0)
             else 0
         )
@@ -89,7 +90,7 @@ class Hinton_distillaton_loss(nn.Module):
         self.weight_of_classify = 1 - weight_of_distill
         self.ignore_label = ignore_label
 
-        self.ce = nn.CrossEntropyLoss(**ce_kwargs)
+        self.ce = RobustCrossEntropyLoss(**ce_kwargs)
 
     def forward(
         self,
