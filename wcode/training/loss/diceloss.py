@@ -16,12 +16,12 @@ class TverskyLoss(nn.Module):
         organization={Springer}
     }
     """
+
     def __init__(
         self,
         alpha=0.5,
         beta=0.5,
         smooth=1e-5,
-        ignore_negetive_class=False,
         batch_dice=True,
         do_bg=True,
         ddp=False,
@@ -31,7 +31,6 @@ class TverskyLoss(nn.Module):
         self.alpha = alpha
         self.beta = beta
         self.smooth = smooth
-        self.ignore_negetive_class = ignore_negetive_class
         self.do_bg = do_bg
         self.batch_dice = batch_dice
         self.apply_nonlin = apply_nonlin
@@ -66,12 +65,6 @@ class TverskyLoss(nn.Module):
                 # b, c, z, y, x -> b, c-1, z, y, x
                 y_onehot = y_onehot[:, 1:]
 
-        if self.ignore_negetive_class:
-            # b, c
-            channel_mask = y_onehot.sum(axes)
-            channel_mask[channel_mask > 0] = 1
-            assert torch.all(channel_mask >= 0)
-
         tp = (
             (x * y_onehot).sum(axes)
             if loss_mask is None
@@ -88,11 +81,6 @@ class TverskyLoss(nn.Module):
             else ((1 - x) * y_onehot * loss_mask).sum(axes)
         )
 
-        if self.ignore_negetive_class:
-            tp = channel_mask * tp
-            fp = channel_mask * fp
-            fn = channel_mask * fn
-
         if self.ddp and self.batch_dice:
             tp = AllGatherGrad.apply(tp).sum(0)
             fp = AllGatherGrad.apply(fp).sum(0)
@@ -106,7 +94,10 @@ class TverskyLoss(nn.Module):
         Tversky = (tp + self.smooth) / (
             tp + self.alpha * fp + self.beta * fn + self.smooth
         )
-
-        Tversky = Tversky.mean()
+        
+        if loss_mask is not None:
+            Tversky = Tversky.sum() / loss_mask.sum()
+        else:
+            Tversky = Tversky.mean()
 
         return 1 - Tversky

@@ -36,10 +36,10 @@ from wcode.training.data_augmentation.custom_transforms.scalar_type import Rando
 from wcode.training.data_augmentation.compute_initial_patch_size import get_patch_size
 from wcode.preprocessing.resampling import ANISO_THRESHOLD
 from wcode.net.build_network import build_network
-from wcode.training.dataset.BasedDataset import BasedDataset
-from wcode.training.loss.compound_loss import Tversky_and_CE_loss
+from wcode.training.dataset.BaseDataset import BaseDataset
+from wcode.training.loss.CompoundLoss import Tversky_and_CE_loss
 from wcode.training.loss.deep_supervision import DeepSupervisionWeightedSummator
-from wcode.training.logs_writer.logger import logger
+from wcode.training.logs_writer.logger_for_segmentation import logger
 from wcode.training.dataloader.Collater import PatchBasedCollater
 from wcode.training.learning_rate.PolyLRScheduler import PolyLRScheduler
 from wcode.training.metrics import get_tp_fp_fn_tn
@@ -50,6 +50,7 @@ from wcode.utils.data_io import files_ending_for_2d_img, files_ending_for_sitk
 from wcode.inferring.PatchBasedPredictor import PatchBasedPredictor
 from wcode.inferring.NaturalImagePredictor import NaturalImagePredictor
 from wcode.inferring.Evaluator import Evaluator
+from wcode.inferring.utils.load_pretrain_weight import load_pretrained_weights
 
 
 class PatchBasedTrainer(object):
@@ -69,7 +70,7 @@ class PatchBasedTrainer(object):
         hyperparams_name = "w_ce_{}_w_dice_{}_w_class_{}".format(
             self.w_ce, self.w_dice, self.w_class
         )
-        
+
         self.verbose = verbose
         self.config_dict = open_yaml(config_file_path)
         if self.config_dict.__contains__("Inferring_settings"):
@@ -97,7 +98,7 @@ class PatchBasedTrainer(object):
             self.dataset_name,
             log_folder_name,
             hyperparams_name,
-            "fold_" + str(self.fold),
+            "fold_" + self.fold,
         )
         config_and_code_save_path = os.path.join(
             self.logs_output_folder, "Config_and_code"
@@ -169,6 +170,7 @@ class PatchBasedTrainer(object):
         ]
         self.ignore_label = training_setting_dict["ignore_label"]
         self.checkpoint_path = training_setting_dict["checkpoint"]
+        self.pretrained_weight = training_setting_dict["pretrained_weight"]
 
     def setting_check(self):
         if len(self.config_dict["Network"]["pool_kernel_size"]) == len(
@@ -237,9 +239,14 @@ class PatchBasedTrainer(object):
             else:
                 raise Exception()
 
-            self.network = self.get_networks(self.config_dict["Network"]).to(
-                self.device
-            )
+            self.network = self.get_networks(self.config_dict["Network"])
+            if self.pretrained_weight is not None:
+                self.print_to_log_file(
+                    "Loading pretrained weight from {}".format(self.pretrained_weight)
+                )
+                load_pretrained_weights(self.network, self.pretrained_weight)
+            self.network.to(self.device)
+
             self.print_to_log_file("Compiling network...")
             self.network = torch.compile(self.network)
 
@@ -252,7 +259,6 @@ class PatchBasedTrainer(object):
                     "alpha": 0.5,
                     "beta": 0.5,
                     "smooth": 1e-5,
-                    "ignore_negetive_class": False,
                     "do_bg": False,
                     "ddp": self.is_ddp,
                     "apply_nonlin": True,
@@ -266,6 +272,8 @@ class PatchBasedTrainer(object):
                 weight_tversky=self.w_dice,
                 ignore_label=self.ignore_label,
             )
+            # from wcode.training.loss.EntropyLoss import RobustCrossEntropyLoss
+            # self.pce = RobustCrossEntropyLoss(ignore_index=0)
 
             self.val_loss = Tversky_and_CE_loss(
                 {
@@ -571,19 +579,19 @@ class PatchBasedTrainer(object):
         return ComposeTransforms(transforms)
 
     def get_train_and_val_dataset(self):
-        train_dataset = BasedDataset(
+        train_dataset = BaseDataset(
             self.dataset_name,
             self.preprocess_config,
             split="train",
-            fold="fold" + str(self.fold),
+            fold=self.fold,
             modality=self.modality,
         )
 
-        val_dataset = BasedDataset(
+        val_dataset = BaseDataset(
             self.dataset_name,
             self.preprocess_config,
             split="val",
-            fold="fold" + str(self.fold),
+            fold=self.fold,
             modality=self.modality,
         )
         return train_dataset, val_dataset
@@ -686,7 +694,7 @@ class PatchBasedTrainer(object):
                         val_outputs.append(self.validation_step(next(self.iter_val)))
                     except StopIteration:
                         self.iter_val = iter(self.dataloader_val)
-                        train_outputs.append(self.validation_step(next(self.iter_val)))
+                        val_outputs.append(self.validation_step(next(self.iter_val)))
                 self.validation_epoch_end(val_outputs)
             self.epoch_end(epoch)
         self.train_end()
@@ -798,6 +806,7 @@ class PatchBasedTrainer(object):
 
             # Compute Loss
             l = self.train_loss(outputs["pred"], labels)
+            # l = self.train_loss(outputs["pred"], labels) + self.pce(outputs["pred"], labels)
 
         if self.grad_scaler is not None:
             self.grad_scaler.scale(l).backward()
@@ -1009,7 +1018,8 @@ class PatchBasedTrainer(object):
         validation_data_file = [
             i
             for i in data_path_list
-            if i.split(".")[0] in dataset_split["fold" + str(self.fold)]["val"]
+            if i.split(".")[0]
+            in dataset_split["0" if self.fold == "all" else self.fold]["val"]
         ]
         validation_data_file.sort()
         validation_data_path = [

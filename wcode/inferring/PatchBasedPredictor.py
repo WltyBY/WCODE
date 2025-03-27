@@ -1,5 +1,6 @@
 import os
 import torch
+import random
 import traceback
 import itertools
 import multiprocessing
@@ -34,7 +35,7 @@ from wcode.inferring.utils.data_iter import preprocessing_iterator_fromfiles
 
 
 class PatchBasedPredictor(object):
-    def __init__(self, config_file_path_or_dict, allow_tqdm, verbose=False):
+    def __init__(self, config_file_path_or_dict, allow_tqdm, verbose=False, seed=319):
         if isinstance(config_file_path_or_dict, str):
             self.config_dict = open_yaml(config_file_path_or_dict)
         else:
@@ -58,6 +59,14 @@ class PatchBasedPredictor(object):
                 "./Dataset_preprocessed", self.dataset_name, "dataset_split.json"
             )
         )
+        self.was_initialized = False
+
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        os.environ["PYTHONHASHSEED"] = str(seed)
 
     def get_inferring_settings(self, inferring_setting_dict):
         self.dataset_name = inferring_setting_dict["dataset_name"]
@@ -125,11 +134,12 @@ class PatchBasedPredictor(object):
 
         print("Compiling network...")
         self.network = torch.compile(self.network)
-    
-    def manual_initialize(self, network):
-        self.num_segmentation_heads = self.config_dict["Network"]["out_channels"]
+        self.was_initialized = True
+
+    def manual_initialize(self, network, num_segmentation_heads):
+        self.num_segmentation_heads = num_segmentation_heads
         self.network = network
-        self.network.to(self.device)
+        self.was_initialized = True
 
     def get_networks(self, network_settings: Dict):
         if "need_features" in network_settings.keys():
@@ -162,10 +172,11 @@ class PatchBasedPredictor(object):
             if i[-checking_length:] in modalities_with_ending_lst
         ]
         file_lst.sort()
-
         # get all the needed cases' name
         if self.split in ["val", "train"] and self.fold is not None:
-            identifier = self.dataset_split["fold" + str(self.fold)][self.split]
+            identifier = self.dataset_split["0" if self.fold == "all" else self.fold][
+                self.split
+            ]
         elif self.split == "test":
             identifier = self.dataset_split[self.split]
         elif self.split in ["val", "train"] and self.fold is None:
@@ -329,7 +340,7 @@ class PatchBasedPredictor(object):
             len(self.patch_size) == 3
         ), "The patch size in 3D prediction for 3D volume should have 3 elements."
         assert isinstance(input_image, torch.Tensor)
-        
+
         self.network.eval()
         empty_cache(self.device)
 
@@ -404,10 +415,10 @@ class PatchBasedPredictor(object):
                         )
                 finally:
                     empty_cache(self.device)
-                    
+
                 if self.verbose:
                     print("running prediction")
-                    
+
                 for sl in tqdm(slicers, disable=not self.allow_tqdm):
                     workon = data[sl][None]
                     workon = workon.to(self.device, non_blocking=False)
@@ -529,6 +540,8 @@ class PatchBasedPredictor(object):
     def predict_logits_from_preprocessed_data(
         self, data: torch.Tensor, predict_way: str
     ) -> torch.Tensor:
+        assert self.was_initialized, "Please initialize network of the predictor."
+
         original_perform_everything_on_gpu = self.perform_everything_on_gpu
         with torch.no_grad():
             prediction = None
@@ -573,18 +586,23 @@ class PatchBasedPredictor(object):
     # infer a single image
     def predict_single_npy_array(
         self,
-        input_images_lst: np.ndarray,
+        input_images_path_lst: np.ndarray,
         preprocess_config: str,
         save_or_return_probabilities: bool = False,
     ):
         """
-        image_properties must only have a 'spacing' key!
+        input:
+            input_images_lst: list of images' paths
+            preprocess_config: predict 3D image in 2D("2d") or 3D("3d") way
+            save_or_return_probabilities: save predicted probabilities or not
+        output:
+            numpy.NDarray: predicted mask (and probability map if save_or_return_probabilities=True)
         """
         ppa = Preprocessor(self.dataset_name, verbose=self.verbose)
         if self.verbose:
             print("preprocessing")
-        # input_images_lst means one case with its all modalities
-        data, _, property = ppa.run_case(input_images_lst, None, preprocess_config)
+
+        data, _, property = ppa.run_case(input_images_path_lst, None, preprocess_config)
 
         data_lst = []
         count = 0

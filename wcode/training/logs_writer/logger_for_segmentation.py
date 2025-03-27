@@ -50,7 +50,7 @@ class logger(object):
         epoch = (
             min([len(i) for i in self.logging.values()]) - 1
         )  # lists of epoch 0 have len 1
-        sns.set(font_scale=2.5)
+        sns.set_theme(font_scale=2.5)
         fig, ax_all = plt.subplots(3, 1, figsize=(30, 54))
         
         ax = ax_all[0]

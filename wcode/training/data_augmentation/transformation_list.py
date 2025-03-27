@@ -6,6 +6,7 @@ from .custom_transforms.DownsampleSegForDSTransform import DownsampleSegForDSTra
 from .custom_transforms.GammaTransform import GammaTransform
 from .custom_transforms.GaussianBlurTransform import GaussianBlurTransform
 from .custom_transforms.GaussianNoiseTransform import GaussianNoiseTransform
+from .custom_transforms.Label2OnehotTransform import Label2OnehotTransform
 from .custom_transforms.LabelValueTransform import LabelValueTransform
 from .custom_transforms.MirrorTransform import MirrorTransform
 from .custom_transforms.MultiplicativeBrightnessTransform import MultiplicativeBrightnessTransform

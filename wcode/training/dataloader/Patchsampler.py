@@ -98,15 +98,13 @@ class Patchsampler(object):
 
             data = self._bbmin_and_bbmax_crop(data, dim, valid_bbmin, valid_bbmax)
             seg = self._bbmin_and_bbmax_crop(seg, dim, valid_bbmin, valid_bbmax)
-
             padding = [
                 (-min(0, bbmin[i]), max(bbmax[i] - shape[i], 0)) for i in range(dim)
             ]
             padding = [(0, 0), *padding]
             data_all.append(np.pad(data, padding, "constant", constant_values=0))
             seg_all.append(np.pad(seg, padding, "constant", constant_values=-1))
-
-        return np.vstack(data_all), np.vstack(seg_all), idx_lst
+        return np.stack(data_all), np.stack(seg_all), idx_lst
 
     def _get_class_location(self, foreground_locations, oversample):
         """

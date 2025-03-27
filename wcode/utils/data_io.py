@@ -23,7 +23,7 @@ def get_all_img_and_label_path(dataset_name, files_ending, channel_names):
     ]
     length_ends = len(files_ending_lst[0])
 
-    if {"images", "labels"}.issubset(folder_lst) and len(folder_lst) == 2:
+    if {"images", "labels"}.issubset(folder_lst):
         images_folder = os.path.join(dataset_folder_path, "images")
         images_name_lst = [
             i for i in os.listdir(images_folder) if i[-length_ends:] in files_ending_lst
@@ -179,7 +179,16 @@ def read_sitk_case(file_paths):
     origins = []
 
     for f in file_paths:
-        sitk_obj = sitk.ReadImage(f)
+        if os.path.isfile(f):
+            sitk_obj = sitk.ReadImage(f)       
+        elif os.path.isdir(f):
+            reader = sitk.ImageSeriesReader();
+            seriesIDs = reader.GetGDCMSeriesIDs(f)
+            dcm_series = reader.GetGDCMSeriesFileNames(f, seriesIDs[0])
+            reader.SetFileNames(dcm_series)
+            sitk_obj =reader.Execute()
+        else:
+            raise Exception(f)
         data_array = sitk.GetArrayFromImage(sitk_obj)
         assert len(data_array.shape) == 3, "only 3d images are supported"
         # spacing in x, y, z

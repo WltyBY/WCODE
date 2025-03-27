@@ -187,6 +187,11 @@ class Preprocessor(object):
             data, seg = self.run_case_npy(data, seg, data_properties, preprocess_config)
         else:
             data, seg = self.run_2d_img_npy(data, seg, data_properties)
+        
+        if np.max(seg) > 127:
+            seg = seg.astype(np.int16)
+        else:
+            seg = seg.astype(np.int8)
 
         return data, seg, data_properties
 
@@ -320,7 +325,7 @@ class Preprocessor(object):
         )
         data_split_dict = open_json(data_split_json)
         identifiers = (
-            data_split_dict["fold0"]["train"] + data_split_dict["fold0"]["val"]
+            data_split_dict["0"]["train"] + data_split_dict["0"]["val"]
         )
 
         files_ending = self.dataset_yaml["files_ending"]
@@ -350,7 +355,7 @@ class Preprocessor(object):
             if not os.path.isfile(os.path.join(raw_data_folder, i))
         ]
 
-        if {"images", "labels"}.issubset(folder_lst) and len(folder_lst) == 2:
+        if {"images", "labels"}.issubset(folder_lst):
             # list of lists with image filenames
             image_fnames = create_lists_from_splitted_dataset_folder(
                 os.path.join("./Dataset", self.dataset_name, "images"),
@@ -382,12 +387,12 @@ class Preprocessor(object):
             image_fnames_train = create_lists_from_splitted_dataset_folder(
                 os.path.join("./Dataset", self.dataset_name, "imagesTr"),
                 files_ending,
-                data_split_dict["fold0"]["train"],
+                data_split_dict["0"]["train"],
             )
             image_fnames_val = create_lists_from_splitted_dataset_folder(
                 os.path.join("./Dataset", self.dataset_name, "imagesVal"),
                 files_ending,
-                data_split_dict["fold0"]["val"],
+                data_split_dict["0"]["val"],
             )
             seg_fnames_train = [
                 [
@@ -395,7 +400,7 @@ class Preprocessor(object):
                         "./Dataset", self.dataset_name, "labelsTr", i + files_ending
                     )
                 ]
-                for i in data_split_dict["fold0"]["train"]
+                for i in data_split_dict["0"]["train"]
             ]
             seg_fnames_val = [
                 [
@@ -403,7 +408,7 @@ class Preprocessor(object):
                         "./Dataset", self.dataset_name, "labelsVal", i + files_ending
                     )
                 ]
-                for i in data_split_dict["fold0"]["val"]
+                for i in data_split_dict["0"]["val"]
             ]
             image_fnames = image_fnames_train + image_fnames_val
             seg_fnames = seg_fnames_train + seg_fnames_val

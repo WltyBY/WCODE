@@ -12,7 +12,7 @@ parser.add_argument(
     default=None,
     help="File Name of Setting yaml, or you can just give the absolute path of the file.",
 )
-parser.add_argument("-f", type=int, default=None, help="fold")
+parser.add_argument("-f", type=str, default=None, help="fold")
 parser.add_argument(
     "--w_ce", type=float, default=1.0, help="weight of CrossEntropyLoss"
 )
@@ -29,7 +29,6 @@ args = parser.parse_args()
 
 if __name__ == "__main__":
     settings_path = os.path.join("./Configs", args.name_setting)
-    print(settings_path)
     Trainer = PatchBasedTrainer(
         settings_path, args.f, args.w_ce, args.w_dice, args.w_class
     )

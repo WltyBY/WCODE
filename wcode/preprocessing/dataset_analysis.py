@@ -82,11 +82,11 @@ class DatasetFingerprintExtractor(object):
                 dataset_new[key] = self.dataset["val"][key]
 
             for i in range(5):
-                self.fold_cases_dict["fold" + str(i)] = {}
-                self.fold_cases_dict["fold" + str(i)]["train"] = sorted(
+                self.fold_cases_dict[str(i)] = {}
+                self.fold_cases_dict[str(i)]["train"] = sorted(
                     list(self.dataset["train"].keys())
                 )
-                self.fold_cases_dict["fold" + str(i)]["val"] = sorted(
+                self.fold_cases_dict[str(i)]["val"] = sorted(
                     list(self.dataset["val"].keys())
                 )
             self.fold_cases_dict["test"] = sorted(list(self.dataset["test"].keys()))
@@ -108,7 +108,7 @@ class DatasetFingerprintExtractor(object):
     ):
         """
         c means different modalities.
-        images = image with multiple channels = shape (c, x, y(, z))
+        images = image with multiple channels = shape (c, (z,) y, x)
         """
         assert images.ndim == 4
         assert segmentation.ndim == 4
@@ -314,7 +314,7 @@ class DatasetFingerprintExtractor(object):
     def save_dataset_split_json(self, save_path):
         output = {}
         for i in range(5):
-            fold = "fold" + str(i)
+            fold = str(i)
             output[fold] = {}
             output[fold]["train"] = [
                 "{}_{}".format(self.dataset_name, case)

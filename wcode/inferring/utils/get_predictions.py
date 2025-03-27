@@ -182,3 +182,58 @@ def export_prediction_from_logits(
         properties_dict,
         ofile + dataset_yaml_dict_or_file_path["files_ending"],
     )
+
+
+def export_original_logits(
+    predicted_logits: Union[torch.Tensor, np.ndarray],
+    properties_dict: dict,
+    ofile: str,
+    dataset_yaml_dict_or_file_path: Union[dict, str],
+    num_threads_torch: int = 8,
+):
+    if isinstance(dataset_yaml_dict_or_file_path, str):
+        dataset_yaml_dict_or_file_path = open_yaml(dataset_yaml_dict_or_file_path)
+
+    old_threads = torch.get_num_threads()
+    torch.set_num_threads(num_threads_torch)
+
+    # resample to original shape (revert resampling)
+    predicted_logits = (
+        predicted_logits.type(torch.float32)
+        if isinstance(predicted_logits, torch.Tensor)
+        else predicted_logits.astype("float32")
+    )
+    predicted_logits_lst = []
+    for i in range(predicted_logits.shape[0]):
+        predicted_logits_lst.append(
+            resample_ND_data_to_given_shape(
+                predicted_logits[i],
+                properties_dict["shape_after_cropping_and_before_resampling"],
+                is_seg=False,
+            )[None]
+        )
+    predicted_logits = torch.from_numpy(np.vstack(predicted_logits_lst)).float()
+
+    if isinstance(predicted_logits, torch.Tensor):
+        predicted_logits = predicted_logits.cpu().numpy()
+
+    # put predicted_logits in bbox (revert cropping)
+    # properties_dict["shape_before_cropping"] is in [(z,) y, x]
+    predicted_logits_reverted_cropping = np.zeros(
+        properties_dict["shape_before_cropping"],
+        dtype=np.float32,
+    )
+    # properties_dict["bbox_used_for_cropping"] is in [bbmin, bbmax],
+    # and bbmin and bbmax are all list object
+    slicer = bounding_box_to_slice(properties_dict["bbox_used_for_cropping"])
+    predicted_logits_reverted_cropping[slicer] = predicted_logits
+    del predicted_logits
+
+    torch.set_num_threads(old_threads)
+
+    # save
+    save_itk(
+        predicted_logits_reverted_cropping,
+        properties_dict,
+        ofile + dataset_yaml_dict_or_file_path["files_ending"],
+    )

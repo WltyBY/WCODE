@@ -1,6 +1,6 @@
 import os
 import cv2
-import shutil
+import random
 import torch
 import traceback
 import itertools
@@ -33,7 +33,7 @@ from wcode.inferring.utils.data_iter import preprocessing_iterator_fromfiles
 
 
 class NaturalImagePredictor(object):
-    def __init__(self, config_file_path_or_dict, allow_tqdm, verbose=False):
+    def __init__(self, config_file_path_or_dict, allow_tqdm, verbose=False, seed=319):
         if isinstance(config_file_path_or_dict, str):
             self.config_dict = open_yaml(config_file_path_or_dict)
         else:
@@ -54,6 +54,14 @@ class NaturalImagePredictor(object):
                 "./Dataset_preprocessed", self.dataset_name, "dataset_split.json"
             )
         )
+        self.was_initialized = False
+
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        os.environ["PYTHONHASHSEED"] = str(seed)
 
     def get_inferring_settings(self, inferring_setting_dict):
         self.dataset_name = inferring_setting_dict["dataset_name"]
@@ -114,12 +122,12 @@ class NaturalImagePredictor(object):
 
         print("Compiling network...")
         self.network = torch.compile(self.network)
-    
-    def manual_initialize(self, network):
-        self.num_segmentation_heads = self.config_dict["Network"]["out_channels"]
+        self.was_initialized = True
+
+    def manual_initialize(self, network, num_segmentation_heads):
+        self.num_segmentation_heads = num_segmentation_heads
         self.network = network
-        self.network.to(self.device)
-        self.network = torch.compile(self.network)
+        self.was_initialized = True
 
     def get_networks(self, network_settings: Dict):
         if "need_features" in network_settings.keys():
@@ -155,7 +163,7 @@ class NaturalImagePredictor(object):
 
         # get all the needed cases' name
         if self.split in ["val", "train"] and self.fold is not None:
-            identifier = self.dataset_split["fold" + str(self.fold)][self.split]
+            identifier = self.dataset_split["0" if self.fold == "all" else self.fold][self.split]
         elif self.split == "test":
             identifier = self.dataset_split[self.split]
         elif self.split in ["val", "train"] and self.fold is None:
@@ -365,7 +373,11 @@ class NaturalImagePredictor(object):
 
         return predicted_logits
 
-    def predict_logits_from_preprocessed_data(self, data: torch.Tensor) -> torch.Tensor:
+    def predict_logits_from_preprocessed_data(
+        self, data: torch.Tensor, predict_way: str = None
+    ) -> torch.Tensor:
+        assert self.was_initialized, "Please initialize network of the predictor."
+        
         original_perform_everything_on_gpu = self.perform_everything_on_gpu
         prediction = None
         if self.perform_everything_on_gpu:

@@ -4,12 +4,23 @@ from wcode.utils.file_operations import open_json, save_json
 from wcode.utils.json_export import recursive_fix_for_json_export
 
 if __name__ == "__main__":
+    # file_path_lst = ["./Prediction/pre2mid_deeps/summary.json"]
+    
+    # file_path_lst = [
+    #     "./Logs/CTLymphNodes02Sparse/v3.1/tversky_alpha_0.3_num_prototype_3_memory_rate_0.99_lambda_for_C_0.1_rampup_epoch_100/fold_0/validation_best/summary.json",
+    #     "./Logs/CTLymphNodes02Sparse/v3.1/tversky_alpha_0.3_num_prototype_3_memory_rate_0.99_lambda_for_C_0.1_rampup_epoch_100/fold_1/validation_best/summary.json",
+    #     "./Logs/CTLymphNodes02Sparse/v3.1/tversky_alpha_0.3_num_prototype_3_memory_rate_0.99_lambda_for_C_0.1_rampup_epoch_100/fold_2/validation_best/summary.json",
+    #     "./Logs/CTLymphNodes02Sparse/v3.1/tversky_alpha_0.3_num_prototype_3_memory_rate_0.99_lambda_for_C_0.1_rampup_epoch_100/fold_3/validation_best/summary.json",
+    #     "./Logs/CTLymphNodes02Sparse/v3.1/tversky_alpha_0.3_num_prototype_3_memory_rate_0.99_lambda_for_C_0.1_rampup_epoch_100/fold_4/validation_best/summary.json",
+    # ]
+
+    base = "./Logs/MSARmid/Fully_deeps_finetune/w_ce_1.0_w_dice_1.0_w_class_[1.0, 1.0]"
     file_path_lst = [
-        "./Predictions/RAOSset3/fold0/summary.json",
-        "./Predictions/RAOSset3/fold1/summary.json",
-        "./Predictions/RAOSset3/fold2/summary.json",
-        "./Predictions/RAOSset3/fold3/summary.json",
-        "./Predictions/RAOSset3/fold4/summary.json",
+        base+"/fold_0/validation_best/summary.json",
+        base+"/fold_1/validation_best/summary.json",
+        base+"/fold_2/validation_best/summary.json",
+        base+"/fold_3/validation_best/summary.json",
+        base+"/fold_4/validation_best/summary.json",
     ]
 
     results = {}

@@ -1,5 +1,6 @@
 import torch
-import numpy as np
+import torch.nn.functional as F
+
 from torch import nn, Tensor
 
 
@@ -40,7 +41,7 @@ class EntropyMinimizeLoss(nn.Module):
         # b, c, (z * y * x)
         x = x.view(*shp_x[:2], -1)
 
-        em_loss = -x * torch.log(x.clamp(min=1e-8))
+        em_loss = -x * torch.log2(x.clamp(min=1e-7))
 
         if self.reduction == "mean":
             return torch.mean(em_loss)
@@ -70,19 +71,19 @@ class SymmetricCrossEntropyLoss(nn.Module):
         self.eps = eps
         self.cross_entropy = RobustCrossEntropyLoss()
 
-    def forward(self, pred, labels):
-        shp_x, shp_y = pred.shape, labels.shape
+    def forward(self, pred, label):
+        shp_x, shp_y = pred.shape, label.shape
 
-        ce = self.cross_entropy(pred, labels)
+        ce = self.cross_entropy(pred, label)
 
         # RCE
         pred = torch.softmax(pred, dim=1)
         pred = torch.clamp(pred, min=self.eps, max=1.0)
 
-        ## trans the labels to one-hot
+        ## trans the label to one-hot
         if len(shp_x) != len(shp_y):
-            labels = labels.view((shp_y[0], 1, *shp_y[1:]))
-        gt = labels.long()
+            label = label.view((shp_y[0], 1, *shp_y[1:]))
+        gt = label.long()
         label_one_hot = torch.zeros(shp_x, device=pred.device)
         label_one_hot.scatter_(1, gt, 1)
         label_one_hot = torch.clamp(label_one_hot, min=1e-4, max=1.0)
@@ -91,6 +92,42 @@ class SymmetricCrossEntropyLoss(nn.Module):
 
         loss = self.alpha * ce + self.beta * rce.mean()
         return loss
+
+
+class GeneralizedCrossEntropyLoss(nn.Module):
+    """
+    @article{zhang2018generalized,
+        title={Generalized cross entropy loss for training deep neural networks with noisy labels},
+        author={Zhang, Zhilu and Sabuncu, Mert},
+        journal={Advances in neural information processing systems},
+        volume={31},
+        year={2018}
+    }
+    """
+
+    def __init__(
+        self,
+        q: float = 0.8,
+        apply_nonlin: bool = True,
+    ):
+        super(GeneralizedCrossEntropyLoss, self).__init__()
+        self.q = q
+        self.apply_nonlin = apply_nonlin
+
+    def forward(self, pred: torch.Tensor, label: torch.Tensor):
+        b, c, *_ = pred.shape
+
+        if len(pred.shape) != len(label.shape):
+            label = label.unsqueeze(1)
+
+        if self.apply_nonlin:
+            pred = F.softmax(pred, dim=1)
+        pred = torch.clamp(pred, min=1e-7, max=1.0)
+        pred = torch.gather(pred, 1, label.long()).transpose(0, 1).reshape(1, -1)
+
+        gce = ((1.0 - torch.pow(pred, self.q)) / self.q).transpose(0, 1)
+
+        return gce.mean()
 
 
 class KL_CE_loss(nn.Module):
@@ -133,9 +170,74 @@ class KL_CE_loss(nn.Module):
             variance = torch.sum(self.KL_loss(torch.log(pred_main), pred_aux), dim=1)
         exp_variance = torch.exp(-variance)
 
-        loss = torch.sum(ce_loss * exp_variance + variance, dim=1)
+        loss = (ce_loss * exp_variance).sum() / exp_variance.sum() + variance.mean()
 
-        return loss.mean()
+        return loss
+
+
+class reliability_based_co_teaching_loss(nn.Module):
+    def __init__(self, weight=None):
+        super(reliability_based_co_teaching_loss, self).__init__()
+        self.ce = RobustCrossEntropyLoss(weight=weight, reduction="none")
+
+    def forward(self, pred_main, pred_aux, feat_main, feat_aux):
+        b, c, *_ = pred_main.shape
+
+        with torch.no_grad():
+            # generate pseudo label
+            hard_main = torch.argmax(pred_main, dim=1, keepdim=True)
+            hard_aux = torch.argmax(pred_aux, dim=1, keepdim=True)
+            soft_main = torch.softmax(pred_main, dim=1)
+            soft_aux = torch.softmax(pred_aux, dim=1)
+            confidence_main, _ = torch.max(soft_main, dim=1, keepdim=True)
+            confidence_aux, _ = torch.max(soft_aux, dim=1, keepdim=True)
+
+            main_mask = confidence_main >= confidence_aux
+            pseudo_label = (
+                main_mask * hard_main + (torch.logical_not(main_mask)) * hard_aux
+            )
+
+            # get reliability map
+            reliability_map_main = torch.zeros_like(
+                hard_main, device=hard_main.device
+            ).float()
+            reliability_map_aux = torch.zeros_like(
+                hard_main, device=hard_main.device
+            ).float()
+            for m in range(b):
+                for i in range(c):
+                    mask_main = torch.where(hard_main[m] == i)
+                    # c_feat, *
+                    class_feat_main = feat_main[m][:, *mask_main[1:]]
+                    # 1, *
+                    class_confidence_main = confidence_main[m][:, *mask_main[1:]]
+                    # c_feat
+                    class_center_main = (class_feat_main * class_confidence_main).mean(
+                        dim=1
+                    )
+                    reliability_map_main[m][mask_main] = F.cosine_similarity(
+                        class_feat_main, class_center_main[:, None], dim=0
+                    )
+
+                    mask_aux = torch.where(hard_aux[m] == i)
+                    # c_feat, *
+                    class_feat_aux = feat_aux[m][:, *mask_aux[1:]]
+                    # 1, *
+                    class_confidence_aux = confidence_aux[m][:, *mask_aux[1:]]
+                    class_center_aux = (class_feat_aux * class_confidence_aux).mean(
+                        dim=1
+                    )
+                    reliability_map_aux[m][mask_aux] = F.cosine_similarity(
+                        class_feat_aux, class_center_aux[:, None], dim=0
+                    )
+
+        loss_main = (
+            self.ce(pred_main, pseudo_label) * reliability_map_aux
+        ).sum() / reliability_map_aux.sum()
+        loss_aux = (
+            self.ce(pred_aux, pseudo_label) * reliability_map_main
+        ).sum() / reliability_map_main.sum()
+        return loss_main + loss_aux
 
 
 # can not use
@@ -181,15 +283,7 @@ class KL_CE_loss(nn.Module):
 if __name__ == "__main__":
     weight = torch.tensor([1, 1, 1]).float()
     x = torch.rand(2, 3, 128, 128, 128)
-    y = torch.randint(0, 3, (2, 128, 128, 128))
+    y = torch.randint(0, 3, (2, 1, 128, 128, 128))
 
-    em = EntropyMinimizeLoss(apply_nonlin=False)
-    x1 = torch.stack(
-        [
-            torch.ones((2, 128, 128, 128)),
-            torch.zeros((2, 128, 128, 128)),
-            torch.zeros((2, 128, 128, 128)),
-        ],
-        dim=1,
-    )
-    print(em(x1))
+    em = GeneralizedCrossEntropyLoss(apply_nonlin=True)
+    print(em(x, y))

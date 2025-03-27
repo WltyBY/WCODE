@@ -6,9 +6,9 @@ from wcode.preprocessing.dataset_analysis import DatasetFingerprintExtractor
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "--dataset", type=str, default="LNQ2023Scribble", help="Name of dataset"
+    "--dataset", type=str, default="LNQ2023Sparse", help="Name of dataset"
 )
-parser.add_argument("--preprocess_config", type=str, default="2d", help="2d or 3d")
+parser.add_argument("--preprocess_config", type=str, default="3d", help="2d or 3d")
 parser.add_argument(
     "--five_fold", type=bool, default=True, help="whether do 5-fold cross-validation"
 )

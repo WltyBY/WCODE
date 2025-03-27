@@ -1,8 +1,7 @@
 import torch
 import torch.nn as nn
-import yaml
 
-from wcode.net.CNN.VNet.VNet import DownBlock, UpBlock, Encoder, Decoder
+from wcode.net.CNN.VNet.VNet import DownBlock, Encoder, Decoder
 
 
 class CrossAttentionModule(nn.Module):

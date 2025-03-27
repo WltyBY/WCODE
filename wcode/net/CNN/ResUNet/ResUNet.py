@@ -3,7 +3,6 @@ from torch import nn
 
 from wcode.net.CNN.baseblock_CNN import ResidualBlock, ConvBlock
 from wcode.net.CNN.pooling import ConvDownPool, ConvUpPool
-from wcode.net.activate_function import ACTIVATE_LAYER
 
 
 class DownBlock(nn.Module):
@@ -87,13 +86,11 @@ class UpBlock(nn.Module):
             activate=activate,
             need_bias=need_bias,
         )
-        Activate_layer = ACTIVATE_LAYER[activate.lower()]
-        self.activate_layer = Activate_layer()
 
     def forward(self, inputs, skip_features):
         up_features = self.uppool(inputs)
         outputs = self.conv(torch.cat([skip_features, up_features], 1))
-        return self.activate_layer(outputs)
+        return outputs
 
 
 class Encoder(nn.Module):

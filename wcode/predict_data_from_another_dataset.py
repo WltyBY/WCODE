@@ -13,7 +13,7 @@ if __name__ == "__main__":
     predict_configs = {
         "dataset_name": "RAOSset3",
         "modality": [0],
-        "fold": 0,
+        "fold": "0",
         "split": "val",
         "original_img_folder": original_img_folder,
         "predictions_save_folder": prediction_save_folder,

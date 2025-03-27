@@ -1,5 +1,5 @@
 import sys
-import math
+import os
 import random
 import numpy as np
 
@@ -36,6 +36,7 @@ class ScribbleGenerator:
         # fix random seed
         np.random.seed(seed)
         random.seed(seed)
+        os.environ["PYTHONHASHSEED"] = str(seed)
 
         # set the maximum depth of recursive calls
         sys.setrecursionlimit(1000000)

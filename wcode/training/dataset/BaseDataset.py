@@ -8,7 +8,7 @@ from wcode.utils.file_operations import open_json, open_yaml, open_pickle
 from wcode.utils.data_io import files_ending_for_2d_img, files_ending_for_sitk
 
 
-class BasedDataset(Dataset):
+class BaseDataset(Dataset):
     def __init__(
         self,
         dataset_name,
@@ -33,7 +33,9 @@ class BasedDataset(Dataset):
             )
         self.split_json = open_json(split_json_path)
 
-        dataset_yaml_path = os.path.join("./Dataset_preprocessed", self.dataset_name, "dataset.yaml")
+        dataset_yaml_path = os.path.join(
+            "./Dataset_preprocessed", self.dataset_name, "dataset.yaml"
+        )
         if not os.path.isfile(dataset_yaml_path):
             raise Exception("dataset.yaml is needed when generating Dataset object.")
         self.dataset_yaml = open_yaml(dataset_yaml_path)
@@ -51,12 +53,20 @@ class BasedDataset(Dataset):
             "preprocessed_datas_" + preprocess_config,
         )
 
-        if self.split in ["train", "val"]:
-            self.ids = self.split_json[fold][self.split]
-        elif self.split == "test":
-            self.ids = self.split_json[self.split]
+        if fold != "all":
+            if self.split in ["train", "val"]:
+                self.ids = self.split_json[fold][self.split]
+            elif self.split == "test":
+                self.ids = self.split_json[self.split]
+            else:
+                raise Exception('Para:split should be "train", "val" or "test".')
         else:
-            raise Exception('Para:split should be "train", "val" or "test".')
+            if self.split in ["train", "val"]:
+                self.ids = self.split_json["0"]["train"] + self.split_json["0"]["val"]
+            elif self.split == "test":
+                self.ids = self.split_json[self.split]
+            else:
+                raise Exception('Para:split should be "train", "val" or "test".')
 
         self.ids.sort()
 
@@ -84,7 +94,9 @@ class BasedDataset(Dataset):
                 count = 0
                 n_channel = property_dict["shapes"][i][0]
                 if i in self.modality:
-                    data_lst.append(data_dict["data"][list(range(count,count+n_channel))])
+                    data_lst.append(
+                        data_dict["data"][list(range(count, count + n_channel))]
+                    )
                 count += n_channel
             sample = {"image": np.vstack(data_lst), "label": data_dict["seg"]}
         else:
@@ -92,7 +104,7 @@ class BasedDataset(Dataset):
                 "image": data_dict["data"][self.modality],
                 "label": data_dict["seg"],
             }
-        
+
         if self.transform is not None:
             sample["image"] = torch.from_numpy(sample["image"]).float()
             sample["label"] = torch.from_numpy(sample["label"]).to(torch.int16)

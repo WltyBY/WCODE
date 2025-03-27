@@ -1,3 +1,5 @@
+import torch.nn.functional as F
+
 from torch import nn
 
 from wcode.net.CNN.baseblock_CNN import module_generate
@@ -77,3 +79,51 @@ class ConvUpPool(nn.Module):
 
     def forward(self, inputs):
         return self.pool(inputs)
+
+
+"""
+Below are personalized customization.
+"""
+############################## Used in VQGAN implementation ####################################
+class Downsample_with_asymmetric_padding(nn.Module):
+    """
+    Only support /2
+    """
+    def __init__(self, in_channels, dim):
+        super().__init__()
+        if dim == 2:
+            Conv_layer = nn.Conv2d
+        elif dim == 3:
+            Conv_layer = nn.Conv3d
+
+        # no asymmetric padding in torch conv, must do it ourselves
+        self.conv = Conv_layer(
+            in_channels, in_channels, kernel_size=3, stride=2, padding=0
+        )
+
+    def forward(self, x):
+        pad = (0, 1, 0, 1)
+        x = F.pad(x, pad, mode="constant", value=0)
+        x = self.conv(x)
+        return x
+
+class Upsample_with_interpolation_and_Conv(nn.Module):
+    """
+    Only support *2
+    """
+    def __init__(self, in_channels, dim):
+        super(Upsample_with_interpolation_and_Conv, self).__init__()
+        if dim == 2:
+            Conv_layer = nn.Conv2d
+        elif dim == 3:
+            Conv_layer = nn.Conv3d
+
+        self.conv = Conv_layer(
+            in_channels, in_channels, kernel_size=3, stride=1, padding=1
+        )
+
+    def forward(self, x):
+        x = F.interpolate(x, scale_factor=2.0, mode="nearest")
+        x = self.conv(x)
+        return x
+############################## Used in VQGAN implementation ####################################

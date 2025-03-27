@@ -147,7 +147,7 @@ class SpatialTransform(BasicTransform):
 
                 mx = torch.max(torch.abs(offsets[d]))
                 offsets[d] /= mx / np.clip(magnitude[d], a_min=1e-8, a_max=np.inf)
-            offsets = torch.permute(offsets, (1, 2, 3, 0))
+            offsets = torch.permute(offsets, (1, 2, 3, 0) if dim == 3 else (1, 2, 0))
         else:
             offsets = None
         # grid center must be in [-1, 1] as required by grid_sample

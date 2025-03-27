@@ -8,7 +8,12 @@ from pprint import pprint
 from time import sleep
 from tqdm import tqdm
 
-from wcode.inferring.utils.metrics import compute_tp_fp_fn_tn, region_or_label_to_mask
+from wcode.inferring.utils.metrics import (
+    compute_tp_fp_fn_tn,
+    region_or_label_to_mask,
+    ASSD,
+    HD95,
+)
 from wcode.utils.file_operations import save_json, open_yaml
 from wcode.utils.json_export import recursive_fix_for_json_export
 from wcode.utils.data_io import files_ending_for_sitk, files_ending_for_2d_img
@@ -35,7 +40,7 @@ class Evaluator:
         self.files_ending = self.dataset_yaml["files_ending"]
         self.num_processes = num_processes
 
-    def run(self):
+    def run(self, cross_dataset=False):
         pred_file_set = set(
             [
                 i
@@ -44,21 +49,31 @@ class Evaluator:
             ]
         )
         gt_file_set = set(os.listdir(self.ground_truth_folder))
-        assert pred_file_set.issubset(
-            gt_file_set
-        ), "predictions should be contained by ground truth."
+        if cross_dataset:
+            assert set([i.split("_")[1][:4] for i in pred_file_set]).issubset(
+                set([i.split("_")[1][:4] for i in gt_file_set])
+            ), "predictions should be contained by ground truth."
+        else:
+            assert pred_file_set.issubset(
+                gt_file_set
+            ), "predictions should be contained by ground truth."
+        pred_dataset = list(pred_file_set)[0].split("_")[0]
+        gt_dataset = list(gt_file_set)[0].split("_")[0]
 
         r = []
         with multiprocessing.get_context("spawn").Pool(self.num_processes) as p:
             for pred in pred_file_set:
                 prediction_file = os.path.join(self.prediction_folder, pred)
-                reference_file = os.path.join(self.ground_truth_folder, pred)
+                reference_file = os.path.join(
+                    self.ground_truth_folder, pred.replace(pred_dataset, gt_dataset)
+                )
                 if self.files_ending in files_ending_for_sitk:
                     pred_obj = sitk.ReadImage(prediction_file)
                     gt_obj = sitk.ReadImage(reference_file)
 
                     pred_array = sitk.GetArrayFromImage(pred_obj)
                     gt_array = sitk.GetArrayFromImage(gt_obj)
+                    spacing = pred_obj.GetSpacing()
                 elif self.files_ending in files_ending_for_2d_img:
                     pred_img = cv2.imread(prediction_file)
                     # gt_array = cv2.imread(reference_file).transpose(2, 0, 1)
@@ -72,11 +87,12 @@ class Evaluator:
                         pred_array.transpose(2, 0, 1)[0],
                         gt_array.transpose(2, 0, 1)[0],
                     )
+                    spacing = None
 
                 r.append(
                     p.starmap_async(
                         Evaluator.compute_case_level_metrics,
-                        ((self, pred_array, gt_array, pred),),
+                        ((self, pred_array, gt_array, pred, spacing),),
                     ),
                 )
             remaining = list(range(len(pred_file_set)))
@@ -135,7 +151,9 @@ class Evaluator:
         pprint(summary)
         save_json(summary, os.path.join(self.prediction_folder, "summary.json"))
 
-    def compute_case_level_metrics(self, pred_array, gt_array, prediction_file):
+    def compute_case_level_metrics(
+        self, pred_array, gt_array, prediction_file, spacing
+    ):
         results = {}
         for r in range(1, len(self.value_fg_class) + 1):
             results[r] = {}
@@ -177,17 +195,38 @@ class Evaluator:
             results[r]["TN"] = tn
             results[r]["n_pred"] = fp + tp
             results[r]["n_gt"] = fn + tp
+            results[r]["ASSD"] = ASSD(pred_mask, gt_mask, spacing=spacing)
+            results[r]["HD95"] = HD95(pred_mask, gt_mask, spacing=spacing)
 
         return prediction_file, results
 
 
 if __name__ == "__main__":
-    prediction_folder = "./Logs/MoNuSegFully/MoNuSegUpper_bound/fold_0/validation"
-    ground_truth_folder = "./Dataset_preprocessed/MoNuSegFully/gt_segmentations"
-    dataset_yaml = "./Dataset_preprocessed/MoNuSegFully/dataset.yaml"
+    dataset_yaml = "./Dataset_preprocessed/LNQ2023/dataset.yaml"
+    prediction_folder = "./Logs/LNQ2023Coarse/Coteaching/select_ratio_0.99_rampup_start_100_rampup_end_200/fold_0/test_final"
+    ground_truth_folder = "./Dataset/LNQ2023/labelsTs"
     eva = Evaluator(
         prediction_folder,
         ground_truth_folder,
         dataset_yaml,
     )
-    eva.run()
+    eva.run(cross_dataset=True)
+
+
+# if __name__ == "__main__":
+#     dataset_yaml = "./Dataset_preprocessed/CTLymphNodes02/dataset.yaml"
+#     log_folder = "/media/ssd/wlty/LNQ/denseRMD"
+#     ground_truth_folder = "./Dataset/CTLymphNodes/labels"
+#     import os
+#     from os.path import join as osjoin
+#     for folder in os.listdir(log_folder):
+#         fold_dir = osjoin(log_folder, folder)
+#         if os.path.isdir(fold_dir):
+#             eva = Evaluator(
+#                 osjoin(fold_dir, "validation"),
+#                 ground_truth_folder,
+#                 dataset_yaml,
+#             )
+#             eva.run(cross_dataset=True)        
+        
+    

@@ -87,7 +87,7 @@ class UpBlock(nn.Module):
             need_bias=need_bias,
         )
         Activate_layer = ACTIVATE_LAYER[activate.lower()]
-        self.activate_layer = Activate_layer()
+        self.activate_layer = Activate_layer(inplace=True)
 
     def forward(self, inputs, skip_features):
         up_features = self.uppool(inputs)

@@ -1,1 +1,0 @@
-PYTHONPATH=. python3 wcode/training/Trainers/ContrastiveLearning/PatchBasedContrastTrainer/train.py --name_setting [config_file_name] -f 0

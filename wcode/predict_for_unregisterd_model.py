@@ -1,18 +1,25 @@
 import os
+import torch
 import argparse
 
 from wcode.inferring.PatchBasedPredictor import PatchBasedPredictor
 from wcode.inferring.Evaluator import Evaluator
 from wcode.utils.file_operations import open_yaml
+from wcode.inferring.utils.load_pretrain_weight import load_pretrained_weights
 
-GPU_ID = 2
+# the architecture of model
+from wcode.training.Trainers.Weakly.NLL.Coteaching.models import BiNet
+from wcode.training.Trainers.Weakly.Incomplete_Learning.ReCo_I2P.models import UsedVNet
+
+GPU_ID = 0
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dataset", type=str, default="LNQ2023", help="Name of dataset")
 parser.add_argument(
     "--settiing_file",
     type=str,
-    default="LNQ2023Sparse_Fully.yaml",
+    default="LNQ2023Sparse_RMD.yaml",
     help="Name of setting files, or its absolute path",
 )
 
@@ -32,13 +39,13 @@ parser.add_argument(
 parser.add_argument(
     "-o",
     type=str,
-    default="./Logs/LNQ2023/Fully_CE_Dice/w_ce_1.0_w_dice_1.0_w_class_[1.0, 1.0]/fold_0/test_best",
+    default="./Logs/LNQ2023Sparse/RMD_improved_clamp/select_ratio_0.999_rampSCoT_0_rampECoT_60_Con_weight_1_rampSCon_0_rampECon_60_NA_1_SASE_60/fold_0/test_final_net2",
     help="folder path of save path",
 )
 parser.add_argument(
     "-m",
     type=str,
-    default="./Logs/LNQ2023/Fully_CE_Dice/w_ce_1.0_w_dice_1.0_w_class_[1.0, 1.0]/fold_0/checkpoint_best.pth",
+    default="./Logs/LNQ2023Sparse/RMD_improved_clamp/select_ratio_0.999_rampSCoT_0_rampECoT_60_Con_weight_1_rampSCon_0_rampECon_60_NA_1_SASE_60/fold_0/checkpoint_final.pth",
     help="saving path of using model",
 )
 parser.add_argument("-f", type=str, default=None, help="fold")
@@ -83,7 +90,15 @@ if __name__ == "__main__":
 
     config_dict["Inferring_settings"] = predict_configs
     predictor = PatchBasedPredictor(config_dict, allow_tqdm=True)
-    predictor.initialize()
+    if args.o is not None and not os.path.exists(args.o):
+        os.makedirs(args.o)
+
+    model = BiNet(config_dict["Network"])
+    # model = UsedVNet(config_dict["Network"], num_prototype=1, memory_rate=0.99)
+    load_pretrained_weights(model, args.m, load_all=True, verbose=True)
+    model.to(predictor.device)
+    model = torch.compile(model)
+    predictor.manual_initialize(model, config_dict["Network"]["out_channels"])
     predictor.predict_from_file(
         predictor.original_img_folder,
         predictor.predictions_save_folder,

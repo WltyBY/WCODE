@@ -39,7 +39,6 @@ class PatchBasedCollater(object):
         # You may meet this situation when we do a patch-based training on Whole Slide Image (WSI). There are 30 WSIs, for
         # example, we set batchsize to 32. So in Patchsampler, we need to sample two more patches.
         output_dict = {key: [] for key in data[0].keys()}
-
         image_lst = []
         label_lst = []
         oversample_lst = []
@@ -51,11 +50,18 @@ class PatchBasedCollater(object):
         # sample patch
         # image: (b, c, patchsize), label: (b, 1, patchsize)
         # start = time.time()
+        
+        #image_list[0]: 1 x Z x H x W label_lst[0]: 3 x Z x H x W
+        # print(image_lst[0].shape, label_lst[0].shape)
+        
+        # (1, 148, 236, 340) (1, 148, 236, 340)
         image, label, idx_lst = self.Patchsampler.run(
             image_lst, label_lst, oversample_lst, self.batchsize
         )
+        # (2, 64, 263, 263) (2, 64, 263, 263)
+        
+        # image: 2 x Z x H x W label: 6x Z x H x W
         # print("Patch Sample: {}s".format(time.time() - start))
-
         # start = time.time()
         # do transform
         if self.transform is not None:
@@ -66,9 +72,12 @@ class PatchBasedCollater(object):
                     image_lst = []
                     label_lst = []
                     for i, idx in zip(list(range(image.shape[0])), idx_lst):
+                        # image: 2 x Z x H x W label: 6 x Z x H x W
+                        # sample['image'] = 2 x Z x H x W
+                        # sample['label'] = 2 x Z x H x W
                         # the input shape for augmetation is c, (z,) y, x
                         sample_data = self.transform(
-                            **{"image": image_all[i][None], "label": label_all[i][None]}
+                            **{"image": image_all[i], "label": label_all[i]}
                         )
                         image_lst.append(sample_data["image"])
                         label_lst.append(sample_data["label"])
@@ -89,5 +98,4 @@ class PatchBasedCollater(object):
         output_dict["image"] = image_all
         output_dict["label"] = label_all
         # print("Augmentation: {}s".format(time.time() - start))
-
         return output_dict

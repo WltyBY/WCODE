@@ -3,8 +3,8 @@ import warnings
 
 from torch import nn
 
-from wcode.training.loss.diceloss import TverskyLoss
-from wcode.training.loss.entropyloss import RobustCrossEntropyLoss
+from wcode.training.loss.DiceLoss import TverskyLoss
+from wcode.training.loss.EntropyLoss import RobustCrossEntropyLoss
 
 
 class Tversky_and_CE_loss(nn.Module):

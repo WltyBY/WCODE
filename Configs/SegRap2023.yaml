@@ -1,6 +1,8 @@
 Network:
+  label: VNet
   in_channels: 2
   out_channels: 3
+  need_bias: True
   deep_supervision: False
   need_features: False
   features: [16, 32, 64, 128, 256, 512]
@@ -17,17 +19,15 @@ Training_settings:
   # one modality: number 0, 1, 2, ...
   # some modalities but not all: list [0, 1, 2]
   # all the modalities: None or str "all"
-  modality: 
+  modality: all
   # to get the logs save folder's name easier to understand. If there is no content here, use time to name the folder
-  method_name: SegRap2023_whole
+  method_name: Fully
   # gpu or cpu used for training
-  device: {"gpu": [1]}
-  # fold can be set to 0, 1, 2, 3, 4
-  fold: 0
+  device: {"gpu": [0]}
   # maximum epoch number to train
   epoch: 200
   # iter number to train per epoch
-  tr_iterations_per_epoch: 300
+  tr_iterations_per_epoch: 250
   # iter number to train per epoch
   val_iterations_per_epoch: 50
   # batch_size per gpu
@@ -38,7 +38,7 @@ Training_settings:
   base_lr: 0.01
   weight_decay: 3.0e-5
   # number of workers
-  num_processes: 8
+  num_processes: 16
   # whether use deterministic training
   deterministic: True
   # random seed
@@ -48,36 +48,8 @@ Training_settings:
   probabilistic_oversampling: False
   # ignore some classes when training
   ignore_label: 
-  # path of model's weight to load. There can be no content here.
-  checkpoint:
-
-Inferring_settings:
-  dataset_name: SegRap2023
-  # You must carefully provide the required modality
-  modality: [0, 1]
-  # fold can be set to 0, 1, 2, 3, 4
-  fold: 0
-  split: val
-  # images' folder. If fold is None, infer all images in this folder.
-  original_img_folder: /media/x/Wlty/LymphNodes/Dataset/SegRap2023/images
-  # Save path of predictions
-  predictions_save_folder: /media/x/Wlty/LymphNodes/Predictions/SegRap2023/output_whole_Only_1
-  model_path: /media/x/Wlty/LymphNodes/Logs/SegRap2023/SegRap2023_whole/fold_0/checkpoint_final.pth
-  # gpu or cpu used for training
-  device: {"gpu": [1]}
-  # whether to predict all the cases
-  overwrite: True
-  # save the soft labels and the files are ended with .npy
-  save_probabilities: False
-  # patch size of network input in z, y, x
-  patch_size: [40, 160, 288]
-  # step size of windows depend on patch size
-  tile_step_size: 0.5
-  # do gaussian importance filt
-  use_gaussian: True
-  perform_everything_on_gpu: True
-  # mirroring axes when inferring
-  use_mirroring: True
-  allowed_mirroring_axes: [1]
-  # number of workers
-  num_processes: 8
+  # path of model's weight to load to continue the training process. There can be no content here.
+  checkpoint: 
+  # path of pretrained weight to load. There can be no content here.
+  pretrained_weight:
+  

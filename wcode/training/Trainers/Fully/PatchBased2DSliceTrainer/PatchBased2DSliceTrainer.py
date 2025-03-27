@@ -14,7 +14,7 @@ from wcode.training.data_augmentation.compute_initial_patch_size import get_patc
 from wcode.training.metrics import get_tp_fp_fn_tn
 from wcode.utils.others import dummy_context
 from wcode.utils.file_operations import open_yaml, copy_file_to_dstFolder
-from wcode.training.logs_writer.logger import logger
+from wcode.training.logs_writer.logger_for_segmentation import logger
 
 
 class PatchBased2DSliceTrainer(PatchBasedTrainer):
@@ -62,7 +62,7 @@ class PatchBased2DSliceTrainer(PatchBasedTrainer):
             self.dataset_name,
             log_folder_name,
             hyperparams_name,
-            "fold_" + str(self.fold),
+            "fold_" + self.fold,
         )
         config_and_code_save_path = os.path.join(
             self.logs_output_folder, "Config_and_code"
