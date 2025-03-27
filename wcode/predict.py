@@ -8,37 +8,37 @@ from wcode.utils.file_operations import open_yaml
 GPU_ID = 2
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--dataset", type=str, default="LNQ2023", help="Name of dataset")
+parser.add_argument("--dataset", type=str, default="SegRap2023", help="Name of dataset")
 parser.add_argument(
     "--settiing_file",
     type=str,
-    default="LNQ2023Sparse_Fully.yaml",
+    default="SegRap2023.yaml",
     help="Name of setting files, or its absolute path",
 )
 
 parser.add_argument(
     "-i",
     type=str,
-    default="./Dataset/LNQ2023/imagesTs",
+    default="./Dataset/SegRap2023/imagesVal",
     help="folder path of input images",
 )
 parser.add_argument(
     "--gt_path",
     type=str,
-    default="./Dataset/LNQ2023/labelsTs",
+    default="./Dataset/SegRap2023/labelsVal",
     help="Path of ground truth. If given, will do evaluation after prediction",
 )
 
 parser.add_argument(
     "-o",
     type=str,
-    default="./Logs/LNQ2023/Fully_CE_Dice/w_ce_1.0_w_dice_1.0_w_class_[1.0, 1.0]/fold_0/test_best",
+    default="./Logs/SegRap2023/Fully/w_ce_1.0_w_dice_1.0_w_class_[1.0, 1.0]/fold_0/validation_best",
     help="folder path of save path",
 )
 parser.add_argument(
     "-m",
     type=str,
-    default="./Logs/LNQ2023/Fully_CE_Dice/w_ce_1.0_w_dice_1.0_w_class_[1.0, 1.0]/fold_0/checkpoint_best.pth",
+    default="./Logs/SegRap2023/Fully/w_ce_1.0_w_dice_1.0_w_class_[1.0, 1.0]/fold_0/checkpoint_best.pth",
     help="saving path of using model",
 )
 parser.add_argument("-f", type=str, default=None, help="fold")

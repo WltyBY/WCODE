@@ -6,7 +6,7 @@ from wcode.preprocessing.dataset_analysis import DatasetFingerprintExtractor
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "--dataset", type=str, default="LNQ2023Sparse", help="Name of dataset"
+    "--dataset", type=str, default="SegRap2023", help="Name of dataset"
 )
 parser.add_argument("--preprocess_config", type=str, default="3d", help="2d or 3d")
 parser.add_argument(
