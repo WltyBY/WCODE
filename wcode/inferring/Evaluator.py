@@ -73,7 +73,7 @@ class Evaluator:
 
                     pred_array = sitk.GetArrayFromImage(pred_obj)
                     gt_array = sitk.GetArrayFromImage(gt_obj)
-                    spacing = pred_obj.GetSpacing()
+                    spacing = pred_obj.GetSpacing()[::-1]
                 elif self.files_ending in files_ending_for_2d_img:
                     pred_img = cv2.imread(prediction_file)
                     # gt_array = cv2.imread(reference_file).transpose(2, 0, 1)
