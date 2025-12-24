@@ -25,6 +25,7 @@ class TverskyLoss(nn.Module):
         batch_dice=True,
         do_bg=True,
         ddp=False,
+        reduction="mean",
         apply_nonlin=True,
     ):
         super(TverskyLoss, self).__init__()
@@ -35,6 +36,9 @@ class TverskyLoss(nn.Module):
         self.batch_dice = batch_dice
         self.apply_nonlin = apply_nonlin
         self.ddp = ddp
+
+        assert reduction in ["mean", "batch"]
+        self.reduction = reduction
 
     def forward(self, x, y, loss_mask=None):
         shp_x, shp_y = x.shape, y.shape
@@ -65,6 +69,7 @@ class TverskyLoss(nn.Module):
                 # b, c, z, y, x -> b, c-1, z, y, x
                 y_onehot = y_onehot[:, 1:]
 
+        # b, c/c-1
         tp = (
             (x * y_onehot).sum(axes)
             if loss_mask is None
@@ -81,23 +86,27 @@ class TverskyLoss(nn.Module):
             else ((1 - x) * y_onehot * loss_mask).sum(axes)
         )
 
-        if self.ddp and self.batch_dice:
-            tp = AllGatherGrad.apply(tp).sum(0)
-            fp = AllGatherGrad.apply(fp).sum(0)
-            fn = AllGatherGrad.apply(fn).sum(0)
-
-        if self.batch_dice:
+        if self.batch_dice and self.reduction == "mean":
+            if self.ddp:
+                # c/c-1
+                tp = AllGatherGrad.apply(tp).sum(0)
+                fp = AllGatherGrad.apply(fp).sum(0)
+                fn = AllGatherGrad.apply(fn).sum(0)
+            # c/c-1
             tp = tp.sum(0)
             fp = fp.sum(0)
             fn = fn.sum(0)
 
+        # if self.reduction="mean", c/c-1; else b, c/c-1
         Tversky = (tp + self.smooth) / (
             tp + self.alpha * fp + self.beta * fn + self.smooth
-        )
-        
-        if loss_mask is not None:
-            Tversky = Tversky.sum() / loss_mask.sum()
-        else:
+        ).clip(min=1e-8)
+
+        if self.reduction == "mean":
+            # a scalar
             Tversky = Tversky.mean()
+        elif self.reduction == "batch":
+            # b
+            Tversky = Tversky.mean(-1)
 
         return 1 - Tversky

@@ -91,7 +91,7 @@ def convert_predicted_logits_to_segmentation_with_correct_shape(
     properties_dict: dict,
     return_probabilities: bool = False,
     num_threads_torch: int = 8,
-):
+) -> np.ndarray:
     old_threads = torch.get_num_threads()
     torch.set_num_threads(num_threads_torch)
 

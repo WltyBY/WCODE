@@ -77,7 +77,7 @@ class PatchBasedTrainer(object):
             del self.config_dict["Inferring_settings"]
 
         self.get_train_settings(self.config_dict["Training_settings"])
-        self.fold = fold
+        self.fold = str(fold)
         self.allow_mirroring_axes_during_inference = None
 
         self.was_initialized = False
@@ -937,7 +937,7 @@ class PatchBasedTrainer(object):
             self.initialize()
 
         if isinstance(filename_or_checkpoint, str):
-            checkpoint = torch.load(filename_or_checkpoint, map_location=self.device)
+            checkpoint = torch.load(filename_or_checkpoint, map_location=self.device, weights_only=False)
         # if state dict comes from nn.DataParallel but we use non-parallel model here then the state dict keys do not
         # match. Use heuristic to make it match
         new_state_dict = {}
@@ -978,7 +978,7 @@ class PatchBasedTrainer(object):
         model_path = os.path.join(self.logs_output_folder, "checkpoint_final.pth")
 
         best_saved_model = torch.load(
-            os.path.join(self.logs_output_folder, "checkpoint_best.pth")
+            os.path.join(self.logs_output_folder, "checkpoint_best.pth"), weights_only=False
         )
         self.print_to_log_file("Pseudo Best Epoch:", best_saved_model["current_epoch"])
         del best_saved_model

@@ -13,6 +13,7 @@ from wcode.inferring.utils.metrics import (
     region_or_label_to_mask,
     ASSD,
     HD95,
+    region_level_metrics_no_conf,
 )
 from wcode.utils.file_operations import save_json, open_yaml
 from wcode.utils.json_export import recursive_fix_for_json_export
@@ -29,7 +30,7 @@ class Evaluator:
         prediction_folder,
         ground_truth_folder,
         dataset_yaml_or_its_path,
-        num_processes=16,
+        num_processes=8,
     ):
         self.prediction_folder = prediction_folder
         self.ground_truth_folder = ground_truth_folder
@@ -52,11 +53,15 @@ class Evaluator:
         if cross_dataset:
             assert set([i.split("_")[1][:4] for i in pred_file_set]).issubset(
                 set([i.split("_")[1][:4] for i in gt_file_set])
-            ), "predictions should be contained by ground truth."
+            ), "predictions should be contained by ground truth. {}".format(
+                pred_file_set - gt_file_set
+            )
         else:
             assert pred_file_set.issubset(
                 gt_file_set
-            ), "predictions should be contained by ground truth."
+            ), "predictions should be contained by ground truth. {}".format(
+                pred_file_set - gt_file_set
+            )
         pred_dataset = list(pred_file_set)[0].split("_")[0]
         gt_dataset = list(gt_file_set)[0].split("_")[0]
 
@@ -159,7 +164,6 @@ class Evaluator:
             results[r] = {}
             pred_mask = region_or_label_to_mask(pred_array, r)
             gt_mask = region_or_label_to_mask(gt_array, r)
-            # print(pred_mask.shape, gt_mask.shape)
             tp, fp, fn, tn = compute_tp_fp_fn_tn(pred_mask, gt_mask)
             if tp + fp + fn == 0:
                 results[r]["Dice"] = np.nan
@@ -198,35 +202,55 @@ class Evaluator:
             results[r]["ASSD"] = ASSD(pred_mask, gt_mask, spacing=spacing)
             results[r]["HD95"] = HD95(pred_mask, gt_mask, spacing=spacing)
 
+            IoU_lst = list(np.arange(0.05, 0.51, 0.05))
+            ap_values, f1_values = region_level_metrics_no_conf(
+                pred_mask,
+                gt_mask,
+                connectivity=pred_mask.ndim,
+                IoU_thresholds=IoU_lst,
+                method="interp",
+            )
+            for i, threshold in enumerate(IoU_lst):
+                (
+                    results[r]["AP@{:.2f}".format(threshold)],
+                    results[r]["F1 score@{:.2f}".format(threshold)],
+                ) = (ap_values[i], f1_values[i])
+            results[r][
+                "AP@[{:.2f}:{:.2f}:{:.2f}]".format(
+                    IoU_lst[0], IoU_lst[1] - IoU_lst[0], IoU_lst[-1]
+                )
+            ] = np.mean(ap_values)
+            results[r][
+                "F1 score@[{:.2f}:{:.2f}:{:.2f}]".format(
+                    IoU_lst[0], IoU_lst[1] - IoU_lst[0], IoU_lst[-1]
+                )
+            ] = np.mean(f1_values)
+
         return prediction_file, results
 
 
-if __name__ == "__main__":
-    dataset_yaml = "./Dataset_preprocessed/LNQ2023/dataset.yaml"
-    prediction_folder = "./Logs/LNQ2023Coarse/Coteaching/select_ratio_0.99_rampup_start_100_rampup_end_200/fold_0/test_final"
-    ground_truth_folder = "./Dataset/LNQ2023/labelsTs"
-    eva = Evaluator(
-        prediction_folder,
-        ground_truth_folder,
-        dataset_yaml,
-    )
-    eva.run(cross_dataset=True)
-
-
 # if __name__ == "__main__":
-#     dataset_yaml = "./Dataset_preprocessed/CTLymphNodes02/dataset.yaml"
-#     log_folder = "/media/ssd/wlty/LNQ/denseRMD"
-#     ground_truth_folder = "./Dataset/CTLymphNodes/labels"
-#     import os
-#     from os.path import join as osjoin
-#     for folder in os.listdir(log_folder):
-#         fold_dir = osjoin(log_folder, folder)
-#         if os.path.isdir(fold_dir):
-#             eva = Evaluator(
-#                 osjoin(fold_dir, "validation"),
-#                 ground_truth_folder,
-#                 dataset_yaml,
-#             )
-#             eva.run(cross_dataset=True)        
-        
-    
+#     dataset_yaml = "./"
+#     prediction_folder = "./"
+#     ground_truth_folder = "./"
+#     eva = Evaluator(
+#         prediction_folder, ground_truth_folder, dataset_yaml
+#     )
+#     eva.run(cross_dataset=True)
+
+
+if __name__ == "__main__":
+    dataset_yaml = "./"
+    log_folder = "./"
+    ground_truth_folder = "./"
+    import os
+    from os.path import join as osjoin
+    for folder in os.listdir(log_folder):
+        fold_dir = osjoin(log_folder, folder)
+        if os.path.isdir(fold_dir):
+            eva = Evaluator(
+                osjoin(fold_dir, "validation"),
+                ground_truth_folder,
+                dataset_yaml,
+            )
+            eva.run(cross_dataset=True)

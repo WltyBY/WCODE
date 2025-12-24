@@ -1,10 +1,25 @@
 import os
+import torch
 import argparse
 
 from wcode.inferring.PatchBasedPredictor import PatchBasedPredictor
 from wcode.inferring.Evaluator import Evaluator
 from wcode.utils.file_operations import open_yaml
- 
+from wcode.inferring.utils.load_pretrain_weight import load_pretrained_weights
+
+# the architecture of model
+from wcode.training.Trainers.Weakly.Incomplete_Learning.TestTrainer.models import (
+    DIVNet_v4,
+    DIVNet_v4_second
+    # DIVNet_CBAM,
+    # DIVNet_CrossAttention,
+)
+from wcode.training.Trainers.Weakly.Incomplete_Learning.ReCo_I2P.models import UsedVNet
+from wcode.training.Trainers.Weakly.Incomplete_Learning.AIO2.models import MeanTeacher
+from wcode.training.Trainers.Weakly.Incomplete_Learning.SASN_IL.models import MeanTeacher as SASNMT
+from wcode.training.Trainers.Weakly.NLL.Coteaching.models import BiNet
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--dataset", type=str, default="SegRap2023", help="Name of dataset")
 parser.add_argument(
@@ -19,6 +34,7 @@ parser.add_argument(
     default=0,
     help="gpu index",
 )
+
 parser.add_argument(
     "-i",
     type=str,
@@ -31,6 +47,7 @@ parser.add_argument(
     default=None,
     help="Path of ground truth. If given, will do evaluation after prediction",
 )
+
 parser.add_argument(
     "-o",
     type=str,
@@ -43,7 +60,7 @@ parser.add_argument(
     default=None,
     help="saving path of using model",
 )
-parser.add_argument("-f", type=str, default=None, help="fold")
+parser.add_argument("-f", type=str, default=None, help="fold, can be None")
 parser.add_argument("-s", type=str, default=None, help="split of data, can be None")
 parser.add_argument(
     "--data_dim",
@@ -85,7 +102,25 @@ if __name__ == "__main__":
 
     config_dict["Inferring_settings"] = predict_configs
     predictor = PatchBasedPredictor(config_dict, allow_tqdm=True)
-    predictor.initialize()
+    if args.o is not None and not os.path.exists(args.o):
+        os.makedirs(args.o)
+
+    # model = MeanTeacher(config_dict["Network"])
+    # model = SASNMT(config_dict["Network"])
+    # model = DIVNet_v4_second(
+    #     config_dict["Network"],
+    #     num_prototype=2,
+    #     memory_rate=0.999,
+    #     update_way="least",
+    #     select_way="merge",
+    # )
+    model = BiNet(config_dict["Network"])
+    # model = UsedVNet(config_dict["Network"], num_prototype=1, memory_rate=0.99)
+
+    load_pretrained_weights(model, args.m, load_all=True, verbose=True)
+    model.to(predictor.device)
+    model = torch.compile(model)
+    predictor.manual_initialize(model, config_dict["Network"]["out_channels"])
     predictor.predict_from_file(
         predictor.original_img_folder,
         predictor.predictions_save_folder,

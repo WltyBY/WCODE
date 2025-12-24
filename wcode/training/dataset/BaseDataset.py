@@ -14,7 +14,7 @@ class BaseDataset(Dataset):
         dataset_name,
         preprocess_config,
         split="train",
-        fold="fold0",
+        fold="0",
         modality=None,
         transform=None,
     ):

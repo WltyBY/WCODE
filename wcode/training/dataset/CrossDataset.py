@@ -14,7 +14,7 @@ class CrossDataset(Dataset):
         dataset_dict: dict,
         preprocess_config,
         split="train",
-        fold="fold0",
+        fold="0",
         modality=None,
         transform=None,
     ):

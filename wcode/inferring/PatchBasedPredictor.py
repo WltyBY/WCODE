@@ -197,6 +197,7 @@ class PatchBasedPredictor(object):
                 if file[:case_name_length] == i
             ]
             one_idx_all_files_lst.sort()
+            
             assert len(modality) == len(
                 one_idx_all_files_lst
             ), "The number of modality({}) is not equal to the number of found files({}).".format(
@@ -586,7 +587,7 @@ class PatchBasedPredictor(object):
     # infer a single image
     def predict_single_npy_array(
         self,
-        input_images_path_lst: np.ndarray,
+        input_images_path_lst: List[str],
         preprocess_config: str,
         save_or_return_probabilities: bool = False,
     ):
@@ -773,78 +774,3 @@ class PatchBasedPredictor(object):
             data_iterator, preprocess_config, save_or_return_probabilities
         )
 
-
-if __name__ == "__main__":
-    import SimpleITK as sitk
-    from wcode.utils.file_operations import open_yaml
-
-    predict_configs = {
-        "dataset_name": "HNTSMRG2024mid",
-        "modality": [0, 1, 2],
-        "fold": 0,
-        "split": "val",
-        "original_img_folder": "./Dataset/HNTSMRG2024mid/images",
-        "predictions_save_folder": "./Predictions/HNTSMRG2024mid",
-        "model_path": "./Logs/HNTSMRG2024mid/HNTSMRG2024mid_oversample/fold_0/checkpoint_latest.pth",
-        "device": {"gpu": [0]},
-        "overwrite": True,
-        "save_probabilities": False,
-        "patch_size": [56, 224, 160],
-        "tile_step_size": 0.5,
-        "use_gaussian": True,
-        "perform_everything_on_gpu": True,
-        "use_mirroring": False,
-        "allowed_mirroring_axes": None,
-        "num_processes": 16,
-    }
-    config_dict = open_yaml("./Configs/HNTSMRG2024mid_oversample.yaml")
-    config_dict["Inferring_settings"] = predict_configs
-    pre = PatchBasedPredictor(config_dict, allow_tqdm=True)
-    pred = pre.predict_single_npy_array(
-        [
-            "./Dataset/HNTSMRG2024mid/images/HNTSMRG2024mid_0003_0000.nii.gz",
-            "./Dataset/HNTSMRG2024mid/images/HNTSMRG2024mid_0003_0001.nii.gz",
-            "./Dataset/HNTSMRG2024mid/images/HNTSMRG2024mid_0003_0002.nii.gz",
-        ],
-        "3d",
-    )
-    pred_obj = sitk.GetImageFromArray(pred)
-    pred_obj.CopyInformation(
-        sitk.ReadImage(
-            "./Dataset/HNTSMRG2024mid/images/HNTSMRG2024mid_0003_0002.nii.gz"
-        )
-    )
-    sitk.WriteImage(pred_obj, "./prediction.nii.gz")
-
-    # predict_configs = {
-    #     "dataset_name": "HNTSMRG2024pre",
-    #     "modality": [0],
-    #     "fold": 0,
-    #     "split": "val",
-    #     "original_img_folder": "./Dataset/HNTSMRG2024pre/images",
-    #     "predictions_save_folder": "./Predictions/HNTSMRG2024pre",
-    #     "model_path": "./Logs/HNTSMRG2024pre/HNTSMRG2024pre_oversample/fold_0/checkpoint_final.pth",
-    #     "device": {"gpu": [3]},
-    #     "overwrite": True,
-    #     "save_probabilities": False,
-    #     "patch_size": [56, 224, 160],
-    #     "tile_step_size": 0.5,
-    #     "use_gaussian": True,
-    #     "perform_everything_on_gpu": True,
-    #     "use_mirroring": False,
-    #     "allowed_mirroring_axes": None,
-    #     "num_processes": 16,
-    # }
-    # config_dict = open_yaml("./Configs/HNTSMRG2024pre_oversample.yaml")
-    # config_dict["Inferring_settings"] = predict_configs
-    # pre = PatchBasedPredictor(config_dict, allow_tqdm=True)
-    # pred = pre.predict_single_npy_array(
-    #     ["./Dataset/HNTSMRG2024mid/images/HNTSMRG2024mid_0003_0000.nii.gz"], "3d"
-    # )
-    # pred_obj = sitk.GetImageFromArray(pred)
-    # pred_obj.CopyInformation(
-    #     sitk.ReadImage(
-    #         "./Dataset/HNTSMRG2024mid/images/HNTSMRG2024mid_0003_0000.nii.gz"
-    #     )
-    # )
-    # sitk.WriteImage(pred_obj, "./prediction.nii.gz")

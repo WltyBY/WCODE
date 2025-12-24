@@ -4,7 +4,7 @@ from torch._dynamo import OptimizedModule
 
 # if your weight is from this framework or nnUNet, use this function
 def load_pretrained_weights(network, fname, load_all=True, verbose=False):
-    saved_model = torch.load(fname)
+    saved_model = torch.load(fname, weights_only=False)
     pretrained_dict = saved_model["network_weights"]
 
     if load_all:

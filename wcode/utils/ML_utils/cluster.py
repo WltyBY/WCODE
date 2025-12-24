@@ -14,14 +14,15 @@ def loadData(filePath):
     return np.array(data), m, n
 
 
-imgData, row, col = loadData(
-    "./Dataset/MoNuSegFully/imagesTr/MoNuSegFully_0000_0000.png"
-)
-print(imgData.shape)
-label = KMeans(n_clusters=3).fit_predict(imgData)
-label = label.reshape([row, col])
-pic_new = image.new("L", (row, col))
-for i in range(row):
-    for j in range(col):
-        pic_new.putpixel((i, j), int(256 / (label[i][j] + 1)))
-pic_new.save("result-bull-4.jpg")
+if __name__ == "__main__":
+    imgData, row, col = loadData(
+        "./Dataset/MoNuSegFully/imagesTr/MoNuSegFully_0000_0000.png"
+    )
+    print(imgData.shape)
+    label = KMeans(n_clusters=3).fit_predict(imgData)
+    label = label.reshape([row, col])
+    pic_new = image.new("L", (row, col))
+    for i in range(row):
+        for j in range(col):
+            pic_new.putpixel((i, j), int(256 / (label[i][j] + 1)))
+    pic_new.save("result-bull-4.jpg")

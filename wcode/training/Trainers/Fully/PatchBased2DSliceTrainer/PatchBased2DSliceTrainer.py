@@ -41,7 +41,7 @@ class PatchBased2DSliceTrainer(PatchBasedTrainer):
             del self.config_dict["Inferring_settings"]
 
         self.get_train_settings(self.config_dict["Training_settings"])
-        self.fold = fold
+        self.fold = str(fold)
         self.allow_mirroring_axes_during_inference = None
 
         self.was_initialized = False
