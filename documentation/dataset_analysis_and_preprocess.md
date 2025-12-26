@@ -47,7 +47,7 @@ The normalization scheme is determined by the `channel_names` listed in `dataset
 
 These keywords are **case-insensitive**; simply include them anywhere in the `channel_names`.
 
-All normalization schemes are implemented in [wocde/preprocessing/normalizing.py](../wocde/preprocessing/normalizing.py); only **CT** images and **label** channels receive special handling. If the automatically chosen method is unsuitable, manually edit the corresponding entry in `/Dataset_preprocessed/{DATASET_NAME}/plan.json` **after** dataset analysis but **before** preprocessing.
+All normalization schemes are implemented in [wcode/preprocessing/normalizing.py](../wcode/preprocessing/normalizing.py); only **CT** images and **label** channels receive special handling. If the automatically chosen method is unsuitable, manually edit the corresponding entry in `/Dataset_preprocessed/{DATASET_NAME}/plan.json` **after** dataset analysis but **before** preprocessing.
 
 **Note**
 For natural images (RGB or grayscale), we strongly recommend manually switching `ZScoreNormalization` to `GeneralNormalization` in `plan.json`, and—if desired—replacing the RGB-channel `mean` & `std` in `dataset_fingerprint.json` with ImageNet (or another reference dataset) statistics.

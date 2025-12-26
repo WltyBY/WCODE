@@ -1,6 +1,6 @@
 # Supported Structures of the Dataset Folder
 
-You should write your own `convert_··.py` scripts to make the file organization format meet the requirements. We give some examples in [wcode/convert_datasets](../wcode/convert_dataset).
+You should write your own `convert_··.py` scripts to make the file organization format meet the requirements. We give some examples in [wcode/convert_datasets](../wcode/convert_datasets).
 
 ## File Name
 
