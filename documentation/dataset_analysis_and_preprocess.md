@@ -60,6 +60,8 @@ For natural images (RGB or grayscale), we strongly recommend manually switching 
 
 Zero-threshold cropping usually removes **nothing**; we recommend performing your own **R**egion **o**f **I**nterest (**ROI**) cropping while **converting** the dataset into the supported format.
 
+Code: [wcode/preprocessing/cropping.py](../wcode/preprocessing/cropping.py).
+
 ## Normalizing (Both 2/3D Images)
 
 Perform the operations `Preprocessor._normalize` as specified in `plan.json → normalization_schemes`.
@@ -68,4 +70,14 @@ In `plan.json`, each entry under `normalization_schemes` corresponds to one moda
 
 **Therefore**, at runtime, we map the modality-level scheme to every channel that belongs to that modality, combining the normalization plan with the per-modality shape to ensure each channel receives the correct treatment.
 
+Code: [wcode/preprocessing/normalizing.py](../wcode/preprocessing/normalizing.py).
+
 ## Resampling (Only for 3D Images)
+
+For 3-D resampling, we handle three cases separately:
+
+1. **Isotropic images** – bicubic interpolation (`order=3`) on all axes.  
+2. **Anisotropic images** – linear interpolation (`order=1`) on the low-resolution axis, bicubic (`order=3`) on the remaining axes.  
+3. **Labels** – nearest-neighbor interpolation (`order=0`) on every axis.
+
+Code: [wcode/preprocessing/resampling.py](../wcode/preprocessing/resampling.py).
