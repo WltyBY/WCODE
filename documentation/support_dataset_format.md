@@ -35,11 +35,12 @@ Dataset
 
 For datasets that already provide **official train/validation/(test) splits**, we recommend reorganizing the raw dataset into the above directory format.
 
-**Note**
-
-- If the official release does not provide an explicit validation split, we treat the test set as the validation set.  
-  In this case, the `imagesTs/` and `labelsTs/` folders **can be omitted**, and the officially-released “test” data should be placed under `imagesVal/` and `labelsVal/`.
-- If you prefer the conventional machine learning split (train / val / test), we recommend creating your own validation set while converting the dataset and moving the corresponding images and labels into the respective folders (original train set -> train + val set ->  `imagesTr/`, `imagesVal/`, `labelsTr/` and `labelsVal/`, original test set -> `imagesTs` and `labelsTs`).
+> **Note**
+>
+> - If the official release does not provide an explicit validation split, we treat the test set as the validation set.  
+>   In this case, the `imagesTs/` and `labelsTs/` folders **can be omitted**, and the officially-released “test” data should be placed under `imagesVal/` and `labelsVal/`.
+> - If you prefer the conventional machine learning split (train / val / test), we recommend creating your own validation set while converting the dataset and moving the corresponding images and labels into the respective folders (original train set -> train + val set ->  `imagesTr/`, `imagesVal/`, `labelsTr/` and `labelsVal/`, original test set -> `imagesTs` and `labelsTs`).
+>
 
 ## Without Official Split
 
@@ -102,10 +103,11 @@ labels:
   phone: [0, 255, 0]
 ```
 
-**Note**
-
-- All channels/modalities must share the same spatial size and be pixel-wise aligned.  
-- For natural images, we treat RGB *et al.* (3 channels) as a single modality, but save it as 3 channels.  
-  Grayscale or depth images, even if stored as 3-channel files, are verified channel-by-channel; if the channels are identical, they are collapsed to a single channel during preprocessing.
-- The values of label in the third situation are [0, 0, 0] -> 0, [255, 0, 0] -> 1, [0, 255, 0] -> 2.
+> **Note**
+>
+> - All channels/modalities must share the same spatial size and be pixel-wise aligned.  
+> - For natural images, we treat RGB *et al.* (3 channels) as a single modality, but save it as 3 channels.  
+>   Grayscale or depth images, even if stored as 3-channel files, are verified channel-by-channel; if the channels are identical, they are collapsed to a single channel during preprocessing.
+> - The values of label in the third situation are [0, 0, 0] -> 0, [255, 0, 0] -> 1, [0, 255, 0] -> 2.
+>
 

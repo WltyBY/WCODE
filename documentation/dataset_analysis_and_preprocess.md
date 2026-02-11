@@ -18,9 +18,7 @@ These results are persisted to `dataset_split.json`, `dataset_fingerprint.json`,
 
 `DatasetFingerprintExtractor.collect_foreground_intensities` only processes 3D images at the channel level. 
 
-**Note**
-
-- When computing foreground-class pixel statistics, we ignore pixels belonging to [**background**, **ignore**, and **unlabel**, or just contain these characters]. For example, if you run a scribble labeled dataset and there is a class that will not compute loss on it, use the [**ignored** or **unlabeled**] to skip the class.
+> **Note**: When computing foreground-class pixel statistics, we ignore pixels belonging to [**background**, **ignore**, and **unlabel**, or just contain these characters]. For example, if you run a scribble labeled dataset and there is a class that will not compute loss on it, use the [**ignored** or **unlabeled**] to skip the class.
 
 This means that if you do **not** want a certain class to be treated as foreground, you must edit the `labels` section in `dataset.yaml` and include the keywords **background**, **ignore**, or **unlabel** in the corresponding class name; any voxel whose label matches one of these keywords will be excluded from intensity statistics.
 
@@ -49,10 +47,15 @@ These keywords are **case-insensitive**; simply include them anywhere in the `ch
 
 All normalization schemes are implemented in [wcode/preprocessing/normalizing.py](../wcode/preprocessing/normalizing.py); only **CT** images and **label** channels receive special handling. If the automatically chosen method is unsuitable, manually edit the corresponding entry in `/Dataset_preprocessed/{DATASET_NAME}/plan.json` **after** dataset analysis but **before** preprocessing.
 
-**Note**
-For natural images (RGB or grayscale), we strongly recommend manually switching `ZScoreNormalization` to `GeneralNormalization` in `plan.json`, and—if desired—replacing the RGB-channel `mean` & `std` in `dataset_fingerprint.json` with ImageNet (or another reference dataset) statistics.
+> **Note**: For natural images (RGB or grayscale), we strongly recommend manually switching `ZScoreNormalization` to `GeneralNormalization` in `plan.json`, and—if desired—replacing the RGB-channel `mean` & `std` in `dataset_fingerprint.json` with ImageNet (or another reference dataset) statistics.
 
 # Preprocessing
+
+**⚠️ Important Notice**
+
+Preprocessing only involves the corresponding operations mentioned below. Before using the provided preprocessing scripts, please verify:
+
+1. Whether the axes of all data are aligned or whether the axes with the worst resolution of all data are aligned.
 
 `Preprocessor` in [wcode/preprocessing/preprocessor.py](../wcode/preprocessing/preprocessor.py) processes the entire dataset by converting every image and label into `.npy` format; accompanying metadata is stored in companion `.pkl` files.
 

@@ -7,8 +7,7 @@
 | **background** [1]               | Background class                                             |
 | **label**, **seg**, **mask** [2] | Channels identified this way are treated as labels: e.g., resampling with nearest-neighbor interpolation. |
 
-**Note** 
-The keywords **above** are **case-insensitive**; a channel is flagged as soon as the keyword appears **anywhere** in its name.
+> **Note**: The keywords **above** are **case-insensitive**; a channel is flagged as soon as the keyword appears **anywhere** in its name.
 
 
 
@@ -16,8 +15,7 @@ The keywords **above** are **case-insensitive**; a channel is flagged as soon as
 | ---------- | --------------------------------------------- |
 | **CT** [2] | Used to determine the normalization strategy. |
 
-**Note** 
-The keywords **above** are **case-sensitive**; a channel is flagged as soon as the keyword appears **anywhere** in its name.
+> **Note**: The keywords **above** are **case-sensitive**; a channel is flagged as soon as the keyword appears **anywhere** in its name.
 
 
 
