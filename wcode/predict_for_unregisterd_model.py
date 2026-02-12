@@ -21,11 +21,11 @@ from wcode.training.Trainers.Weakly.NLL.Coteaching.models import BiNet
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--dataset", type=str, default="SegRap2023", help="Name of dataset")
+parser.add_argument("--dataset", type=str, default="LNQ2023", help="Name of dataset")
 parser.add_argument(
     "--settiing_file",
     type=str,
-    default="SegRap2023.yaml",
+    default="LNQ2023_Ours.yaml",
     help="Name of setting files, or its absolute path",
 )
 parser.add_argument(
@@ -38,26 +38,26 @@ parser.add_argument(
 parser.add_argument(
     "-i",
     type=str,
-    default=None,
+    default="./Dataset/LNQ2023/imagesTs",
     help="folder path of input images",
 )
 parser.add_argument(
     "--gt_path",
     type=str,
-    default=None,
+    default="./Dataset/LNQ2023/labelsTs",
     help="Path of ground truth. If given, will do evaluation after prediction",
 )
 
 parser.add_argument(
     "-o",
     type=str,
-    default=None,
+    default="./Logs/LNQ2023/only_P1/tversky_alpha_0.3_awce_beta_1.0_consis_weight_0.1_rampup_epoch_100_update_way_least_select_way_merge_num_prototype_2_memory_rate_0.999/fold_0/test_best_second",
     help="folder path of save path",
 )
 parser.add_argument(
     "-m",
     type=str,
-    default=None,
+    default="./Logs/LNQ2023/only_P1/tversky_alpha_0.3_awce_beta_1.0_consis_weight_0.1_rampup_epoch_100_update_way_least_select_way_merge_num_prototype_2_memory_rate_0.999/fold_0/checkpoint_best.pth",
     help="saving path of using model",
 )
 parser.add_argument("-f", type=str, default=None, help="fold, can be None")
@@ -116,7 +116,6 @@ if __name__ == "__main__":
     # )
     model = BiNet(config_dict["Network"])
     # model = UsedVNet(config_dict["Network"], num_prototype=1, memory_rate=0.99)
-
     load_pretrained_weights(model, args.m, load_all=True, verbose=True)
     model.to(predictor.device)
     model = torch.compile(model)

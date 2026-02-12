@@ -1,8 +1,8 @@
 import torch
 from torch import nn
 
-from wcode.net.CNN.baseblock_CNN import ResidualBlock, ConvBlock
-from wcode.net.CNN.pooling import ConvDownPool, ConvUpPool
+from wcode.net.CNN.modules.baseblock_CNN import ResidualBlock, ConvBlock
+from wcode.net.CNN.modules.pooling import ConvDownPool, ConvUpPool
 
 
 class DownBlock(nn.Module):

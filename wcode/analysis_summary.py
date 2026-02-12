@@ -4,9 +4,9 @@ from wcode.utils.file_operations import open_json, save_json
 from wcode.utils.json_export import recursive_fix_for_json_export
 
 if __name__ == "__main__":
-    # file_path_lst = ["./"]
+    # file_path_lst = ["./Logs/LNQ2023/only_P1/0_tversky_alpha_0.3_awce_beta_1.0_consis_weight_0.1_rampup_epoch_100_update_way_least_select_way_merge_num_prototype_2_memory_rate_0.999/fold_0/test_best/summary.json"]
 
-    base = "./"
+    base = "./Logs/CTLymphNodes02/BS8/tversky_alpha_0.4_awce_beta_1.0_consis_weight_1.0_rampup_epoch_100_update_way_least_select_way_merge_num_prototype_3_memory_rate_0.999"
     file_path_lst = [
         base + "/fold_{}/validation/summary.json".format(i) for i in range(5)
     ]

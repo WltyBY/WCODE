@@ -1,5 +1,6 @@
 import multiprocessing
 import os
+from re import A
 import cv2
 import random
 import numpy as np
@@ -9,7 +10,9 @@ from time import sleep
 from typing import List, Tuple
 
 from wcode.preprocessing.cropping import crop_to_mask
-from wcode.preprocessing.resampling import get_lowres_axis, whether_anisotropy
+from wcode.preprocessing.resampling import (
+    ANISO_THRESHOLD,
+)
 from wcode.preprocessing.normalizing import find_normalizer
 from wcode.utils.file_operations import (
     open_yaml,
@@ -17,31 +20,35 @@ from wcode.utils.file_operations import (
     save_json,
     copy_file_to_dstFolder,
 )
+from wcode.utils.json_export import recursive_fix_for_json_export
 from wcode.utils.data_io import get_all_img_and_label_path, read_sitk_case, read_2d_img
-from wcode.utils.data_io import files_ending_for_sitk, files_ending_for_2d_img
+from wcode.utils.data_io import file_endings_for_sitk, file_endings_for_2d_img
 from wcode.utils.dataset_split import dataset_split
 
 
 class DatasetFingerprintExtractor(object):
     def __init__(
         self,
-        dataset_name,
-        five_fold: bool,
+        dataset_name: str = None,
+        kfold: int = None,
         split_rate: list = [7, 1, 2],
         random_seed=319,
         verbose: bool = False,
     ):
-        # if False, show progress bar
-        self.verbose = verbose
+        self.verbose = verbose  # if False, show progress bar
         self.random_seed = random_seed
+        self.kfold = kfold
+
+        # For reproducibility
         random.seed(random_seed)
         np.random.seed(random_seed)
         os.environ["PYTHONHASHSEED"] = str(random_seed)
 
-        if not dataset_name:
+        if dataset_name is None:
             raise Exception(
-                "You should provide dataset_name to get dataset_figureprint.json and dataset.yaml"
+                "You should provide dataset_name to get images, labels and dataset.yaml"
             )
+
         self.dataset_name = dataset_name
         self.input_folder = os.path.join("./Dataset", dataset_name)
         self.dataset_yaml = open_yaml(os.path.join(self.input_folder, "dataset.yaml"))
@@ -49,38 +56,38 @@ class DatasetFingerprintExtractor(object):
             os.path.join(self.input_folder, "dataset.yaml"),
             os.path.join("./Dataset_preprocessed", dataset_name),
         )
+
         self.dataset, self.whether_need_to_split = get_all_img_and_label_path(
             dataset_name,
             self.dataset_yaml["files_ending"],
             self.dataset_yaml["channel_names"],
         )
 
-        if self.dataset_yaml["files_ending"] in files_ending_for_sitk:
+        if self.dataset_yaml["files_ending"] in file_endings_for_sitk:
             self.img_Reader = read_sitk_case
-        elif self.dataset_yaml["files_ending"] in files_ending_for_2d_img:
+        elif self.dataset_yaml["files_ending"] in file_endings_for_2d_img:
             self.img_Reader = read_2d_img
         else:
-            raise Exception("Files' ending NOT SUPPORT!!!")
+            raise Exception("File ending NOT SUPPORT!!!")
 
         if self.whether_need_to_split:
-            (
-                self.train_and_val_set,
-                self.fold_cases_dict,
-                self.fold_cases_dict["all_fold_is_the_same"],
-            ) = dataset_split(
-                list(self.dataset.keys()), five_fold=five_fold, split_rate=split_rate
+            self.fold_cases_dict, self.fold_cases_dict["all_fold_is_the_same"] = (
+                dataset_split(
+                    list(self.dataset.keys()),
+                    num_fold=self.kfold,
+                    split_rate=split_rate,
+                    random_seed=self.random_seed,
+                )
             )
         else:
-            self.train_and_val_set = list(self.dataset["train"].keys()) + list(
-                self.dataset["val"].keys()
-            )
-            self.fold_cases_dict = {}
+            # trans the self.dataset to {"case_id": {"image": [IMG_path], "label": [LABEL_path]}}
             dataset_new = dict()
             for key in self.dataset["train"].keys():
                 dataset_new[key] = self.dataset["train"][key]
             for key in self.dataset["val"].keys():
                 dataset_new[key] = self.dataset["val"][key]
 
+            self.fold_cases_dict = dict()
             for i in range(5):
                 self.fold_cases_dict[str(i)] = {}
                 self.fold_cases_dict[str(i)]["train"] = sorted(
@@ -92,31 +99,35 @@ class DatasetFingerprintExtractor(object):
             self.fold_cases_dict["test"] = sorted(list(self.dataset["test"].keys()))
             self.fold_cases_dict["all_fold_is_the_same"] = True
             self.dataset = dataset_new
+        self.train_and_val_set = (
+            self.fold_cases_dict["0"]["train"] + self.fold_cases_dict["0"]["val"]
+        )
 
-        # We don't want to use all foreground voxels because that can accumulate a lot of data (out of memory). It is
-        # also not critically important to get all pixels as long as there are enough. Let's use 10e7 voxels in total
-        # (for the entire dataset)
+        # For 3D images, foreground statistics are computed on at most 10e7, which is large enough.
         self.num_foreground_voxels_for_intensitystats = 10e7
 
     @staticmethod
     def collect_foreground_intensities(
-        segmentation: np.ndarray,
         images: np.ndarray,
+        segmentation: np.ndarray,
         dataset_yaml: dict,
         seed: int = 319,
         num_samples: int = 10000,
     ):
         """
-        c means different modalities.
-        images = image with multiple channels = shape (c, (z,) y, x)
+        For 3D images,
+        collect foreground intensities from images according to segmentation for each channel.
+
+        images: image with multiple channels, shape (c, z, y, x), c means different modalities/channels.
+        segmentation: segmentation map, shape (1, z, y, x)
         """
         assert images.ndim == 4
         assert segmentation.ndim == 4
 
+        assert not np.any(np.isnan(images)), "Images contains NaN values. :-("
         assert not np.any(
             np.isnan(segmentation)
-        ), "Segmentation contains NaN values. grrrr.... :-("
-        assert not np.any(np.isnan(images)), "Images contains NaN values. grrrr.... :-("
+        ), "Segmentation contains NaN values. :-("
 
         rs = np.random.RandomState(seed)
 
@@ -124,14 +135,14 @@ class DatasetFingerprintExtractor(object):
         # we don't use the intensity_statistics_per_channel at all, it's just something that might be nice to have
         intensity_statistics_per_channel = []
 
-        # segmentation is 4d: 1,x,y,z. We need to remove the empty dimension for the following code to work
+        # segmentation is 3/4d: 1, z, y, x.
         having_classes_dict = dataset_yaml["labels"]
         foreground_mask = np.zeros_like(segmentation[0], dtype=bool)
         for class_name, class_values in having_classes_dict.items():
             if (
                 any(
                     True if s in class_name.lower() else False
-                    for s in ["unlabel", "ignore"]
+                    for s in ["unlabel", "ignore", "background"]
                 )
                 or class_values <= 0
             ):
@@ -173,16 +184,17 @@ class DatasetFingerprintExtractor(object):
     ):
         """
         We assume the input 2d image is in (c, x, y), and channel in RGB
-        images = image with multiple channels = shape (c, x, y)
+        images: image with multiple channels, shape (c, x, y)
         """
         assert images.ndim == 3
-        assert not np.any(np.isnan(images)), "Images contains NaN values. grrrr.... :-("
+        assert not np.any(np.isnan(images)), "Images contains NaN values. :-("
 
         cumulative_mean = np.zeros(images.shape[0])
         cumulative_std = np.zeros(images.shape[0])
         cumulative_min = np.zeros(images.shape[0])
         cumulative_max = np.zeros(images.shape[0])
         cumulative_median = np.zeros(images.shape[0])
+        intensities_per_channel = []
 
         # len(images) means the number of channels
         for i in range(len(images)):
@@ -191,8 +203,9 @@ class DatasetFingerprintExtractor(object):
             cumulative_min[i] = np.min(images[i, :, :])
             cumulative_max[i] = np.max(images[i, :, :])
             cumulative_median[i] = np.median(images[i, :, :])
+            intensities_per_channel.append(images[i, :, :].flatten())
 
-        return {
+        return intensities_per_channel, {
             "mean": cumulative_mean,
             "std": cumulative_std,
             "min": cumulative_min,
@@ -204,22 +217,24 @@ class DatasetFingerprintExtractor(object):
         self,
         image_files: List[str],
         segmentation_file: str,
-        seed: int = 319,
         num_samples: int = 10000,
     ):
         images, properties_image = self.img_Reader(image_files)
+
         if images.ndim == 4:
-            segmentation, properties_seg = self.img_Reader(segmentation_file)
-            data_cropped, seg_cropped, bbox = crop_to_mask(images, segmentation)
+            segmentation, _ = self.img_Reader(segmentation_file)
+            data_cropped, seg_cropped, _ = crop_to_mask(
+                images, segmentation, crop_fun_args={"threshold": 0}
+            )
 
             (
                 foreground_intensities_per_channel,
                 foreground_intensity_stats_per_channel,
             ) = DatasetFingerprintExtractor.collect_foreground_intensities(
-                seg_cropped,
-                data_cropped,
-                self.dataset_yaml,
-                seed=seed,
+                images=data_cropped,
+                segmentation=seg_cropped,
+                dataset_yaml=self.dataset_yaml,
+                seed=self.random_seed,
                 num_samples=num_samples,
             )
 
@@ -231,89 +246,71 @@ class DatasetFingerprintExtractor(object):
                 shape_before_crop
             )
 
-            # print(shape_after_crop, shape_before_crop, relative_size_after_cropping)
-
             return (
                 shape_after_crop,
+                relative_size_after_cropping,
                 spacing,
                 foreground_intensities_per_channel,
                 foreground_intensity_stats_per_channel,
-                relative_size_after_cropping,
             )
         elif images.ndim == 3:
-            seg = cv2.cvtColor(cv2.imread(segmentation_file[0]), cv2.COLOR_BGR2RGB)
-            seg_new = np.zeros_like(seg)
-            for i, key in enumerate(self.dataset_yaml["labels"].keys()):
-                label = np.array(self.dataset_yaml["labels"][key])
-                seg_new[seg == label] = i
-            seg = seg_new.transpose(2, 0, 1)[0][None]
-            intensity_stats_per_channel = (
+            intensities_per_channel, intensity_stats_per_channel = (
                 DatasetFingerprintExtractor.statistic_for_2d_data(images)
             )
             # here properties_image is the shapes of images
-            return intensity_stats_per_channel, properties_image
+            return (
+                intensities_per_channel,
+                intensity_stats_per_channel,
+                properties_image,
+            )
         else:
             raise Exception("Can only process 2d (ndim=3) and 3d (ndim=4) data")
 
     @staticmethod
-    def find_target_spacing(spacings: list):
-        anisotropy_flag = False
+    def find_target_spacing(spacings: list) -> np.ndarray:
+        """
+        Spacing in x, y, z order
+        """
         dim = len(spacings[0])
-        spacings_array = np.array(spacings)
-        worst_axis_lst = [0 for _ in range(dim)]
 
-        for spacing in spacings:
-            if not anisotropy_flag:
-                anisotropy_flag = whether_anisotropy(spacing)
-            worst_axis_lst[get_lowres_axis(spacing)] += 1
+        spacings_array = np.array(spacings)  # N, ndim
+        target_spacing = np.percentile(spacings, 50, axis=0)
+        worst_axis = np.argmax(target_spacing)
+        other_spacings = [target_spacing[i] for i in range(dim) if i != worst_axis]
 
-        if anisotropy_flag:
-            target_spacing = [np.nan for _ in range(dim)]
-            worst_axis = np.argmax(worst_axis_lst)
+        if max(target_spacing) / min(other_spacings) > ANISO_THRESHOLD:
             worst_axis_spacing = np.percentile(spacings_array[:, worst_axis], 10)
-            target_spacing[worst_axis] = worst_axis_spacing
-            for axis in range(dim):
-                if axis == worst_axis:
-                    continue
-                target_spacing[axis] = np.median(spacings_array[:, axis])
-        else:
-            target_spacing = [np.nan for _ in range(dim)]
-            for axis in range(dim):
-                target_spacing[axis] = np.median(spacings_array[:, axis])
+            if worst_axis_spacing < max(other_spacings):
+                worst_axis_spacing = max(other_spacings) + 1e-5
 
-        if True in np.isnan(target_spacing):
-            raise Exception("There is Nan in target_spacing during calculating.")
+            target_spacing[worst_axis] = worst_axis_spacing
 
         return target_spacing
 
     @staticmethod
-    def get_median_shape(shapes_after_crop: list, spacings: list, target_spacing):
+    def get_median_shape(
+        shapes_after_crop: list, spacings: list, target_spacing: np.ndarray
+    ):
         dim = len(shapes_after_crop[0])
         shapes_after_resample = []
         if dim == 3:
             for i in range(len(shapes_after_crop)):
-                origin_spacing = spacings[i]
-                zoom = [origin_spacing[j] / target_spacing[j] for j in range(dim)]
-                zoom = np.array([zoom[2], zoom[1], zoom[0]])
+                origin_spacing = np.array(spacings[i])
+                zoom = (origin_spacing / target_spacing)[::-1]  # x, y, z -> z, y, x
                 shapes_after_resample.append(np.array(shapes_after_crop[i]) * zoom)
         else:
             raise Exception("We can only process 3D data here.")
 
-        median_shape = [np.nan for _ in range(dim)]
         shapes_after_resample_array = np.array(shapes_after_resample)
-        for axis in range(dim):
-            median_shape[axis] = int(
-                np.round(np.median(shapes_after_resample_array[:, axis]))
-            )
-
-        if True in np.isnan(median_shape):
-            raise Exception("There is Nan in median_shape during calculating.")
+        median_shape = np.round(
+            np.percentile(shapes_after_resample_array, 50, axis=0)
+        ).astype(int)
 
         return median_shape
 
     def save_dataset_split_json(self, save_path):
         output = {}
-        for i in range(5):
+        for i in range(self.kfold if self.kfold is not None else 5):
             fold = str(i)
             output[fold] = {}
             output[fold]["train"] = [
@@ -344,8 +341,12 @@ class DatasetFingerprintExtractor(object):
     def determine_normalization_scheme_and_whether_mask_is_used_for_norm(
         self,
     ) -> Tuple[List[str], List[bool]]:
-        if "channel_names" not in self.dataset_yaml.keys():
-            print('WARNING: "channel_names" should be in dataset.yaml.')
+        assert (
+            "channel_names" in self.dataset_yaml.keys()
+        ), 'WARNING: "channel_names" should be in dataset.yaml.'
+
+        # determine based on the modality names, not the channels of data itself.
+        # RGB images are 3-channeled but treat as one modality here.
         modalities = self.dataset_yaml["channel_names"]
         normalization_schemes = [find_normalizer(m) for m in modalities.values()]
         if self.median_relative_size_after_cropping < (3 / 4.0):
@@ -355,13 +356,11 @@ class DatasetFingerprintExtractor(object):
             ]
         else:
             use_nonzero_mask_for_norm = [False] * len(normalization_schemes)
-            assert all([i in (True, False) for i in use_nonzero_mask_for_norm]), (
-                "use_nonzero_mask_for_norm must be " "True or False and cannot be None"
-            )
+
         normalization_schemes = [i.__name__ for i in normalization_schemes]
         return normalization_schemes, use_nonzero_mask_for_norm
 
-    def run(self, num_processes: int = 8, overwrite_existing: bool = False) -> dict:
+    def run(self, num_workers: int = 8, overwrite_existing: bool = False) -> dict:
         preprocessed_output_folder = os.path.join(
             "./Dataset_preprocessed", self.dataset_name
         )
@@ -383,7 +382,7 @@ class DatasetFingerprintExtractor(object):
             )
 
             r = []
-            with multiprocessing.get_context("spawn").Pool(num_processes) as p:
+            with multiprocessing.get_context("spawn").Pool(num_workers) as p:
                 for k in self.train_and_val_set:
                     r.append(
                         p.starmap_async(
@@ -392,7 +391,6 @@ class DatasetFingerprintExtractor(object):
                                 (
                                     self.dataset[k]["image"],
                                     self.dataset[k]["label"],
-                                    self.random_seed,
                                     num_foreground_samples_per_case,
                                 ),
                             ),
@@ -423,40 +421,37 @@ class DatasetFingerprintExtractor(object):
                         remaining = [i for i in remaining if i not in done]
                         sleep(0.1)
 
-            # results = ptqdm(DatasetFingerprintExtractor.analyze_case,
-            #                 (training_images_per_case, training_labels_per_case),
-            #                 processes=self.num_processes, zipped=True, reader_writer_class=reader_writer_class,
-            #                 num_samples=num_foreground_samples_per_case, disable=self.verbose)
             results = [i.get()[0] for i in r]
 
-            if self.dataset_yaml["files_ending"] in files_ending_for_sitk:
+            if self.dataset_yaml["files_ending"] in file_endings_for_sitk:
+                """
+                shape_after_crop,
+                relative_size_after_cropping,
+                spacing,
+                foreground_intensities_per_channel,
+                foreground_intensity_stats_per_channel,
+                """
                 shapes_after_crop = [r[0] for r in results]
-                spacings = [r[1] for r in results]
-                foreground_intensities_per_channel = [
-                    np.concatenate([r[2][i] for r in results])
-                    for i in range(len(results[0][2]))
-                ]
-                # we drop this so that the json file is somewhat human readable
-                # foreground_intensity_stats_by_case_and_modality = [r[3] for r in results]
                 self.median_relative_size_after_cropping = np.median(
-                    [r[4] for r in results], 0
+                    [r[1] for r in results], 0
                 )
+                spacings = [r[2] for r in results]
+                foreground_intensities_per_channel = [
+                    np.concatenate([r[3][i] for r in results])
+                    for i in range(len(results[0][3]))
+                ]
 
-                num_channels = len(
-                    self.dataset_yaml["channel_names"].keys()
-                    if "channel_names" in self.dataset_yaml.keys()
-                    else self.dataset_yaml["modality"].keys()
-                )
                 channels_name = list(
                     self.dataset_yaml["channel_names"].values()
                     if "channel_names" in self.dataset_yaml.keys()
                     else self.dataset_yaml["modality"].values()
                 )
+                num_channels = len(channels_name)
                 intensity_statistics_per_channel = {}
                 percentiles = np.array((0.5, 50.0, 99.5))
                 for i in range(num_channels):
                     if any(
-                        True if s in channels_name[i] else False
+                        True if s in channels_name[i].lower() else False
                         for s in ["mask", "label", "seg"]
                     ):
                         intensity_statistics_per_channel[i] = {
@@ -498,6 +493,8 @@ class DatasetFingerprintExtractor(object):
                 }
 
                 try:
+                    recursive_fix_for_json_export(fingerprint)
+                    recursive_fix_for_json_export(plans)
                     save_json(fingerprint, properties_file)
                     save_json(plans, plans_file)
                     data_split = self.save_dataset_split_json(dataset_split_file)
@@ -509,28 +506,41 @@ class DatasetFingerprintExtractor(object):
                     if os.path.isfile(dataset_split_file):
                         os.remove(dataset_split_file)
                     raise e
-            elif self.dataset_yaml["files_ending"] in files_ending_for_2d_img:
-                foreground_intensities_per_channel = [r[0] for r in results]
+            elif self.dataset_yaml["files_ending"] in file_endings_for_2d_img:
+                """
+                intensities_per_channel,
+                intensity_stats_per_channel,
+                properties_image
+                """
+                intensities_per_channel_all_case = [r[0] for r in results]
                 num_channels = np.sum(
                     [
-                        results[0][1]["shapes"][i][0]
-                        for i in range(len(results[0][1]["shapes"]))
+                        results[0][2]["shapes"][i][0]
+                        for i in range(len(results[0][2]["shapes"]))
                     ]
                 )
-                foreground_intensities_statistics_per_channel = {
+                intensities_statistics_per_channel = {
                     str(i): {} for i in range(num_channels)
                 }
-                for id_channel in foreground_intensities_statistics_per_channel.keys():
-                    for key in foreground_intensities_per_channel[0].keys():
-                        stat_result = []
-                        for case in foreground_intensities_per_channel:
-                            stat_result.append(case[key][int(id_channel)])
-                        foreground_intensities_statistics_per_channel[id_channel][
-                            key
-                        ] = np.mean(stat_result)
+                for i in range(num_channels):
+                    intensities_statistics_per_channel[str(i)]["mean"] = np.mean(
+                        intensities_per_channel_all_case[i]
+                    )
+                    intensities_statistics_per_channel[str(i)]["median"] = np.median(
+                        intensities_per_channel_all_case[i]
+                    )
+                    intensities_statistics_per_channel[str(i)]["std"] = np.std(
+                        intensities_per_channel_all_case[i]
+                    )
+                    intensities_statistics_per_channel[str(i)]["min"] = np.min(
+                        intensities_per_channel_all_case[i]
+                    )
+                    intensities_statistics_per_channel[str(i)]["max"] = np.max(
+                        intensities_per_channel_all_case[i]
+                    )
 
                 fingerprint = {
-                    "foreground_intensity_properties_per_channel": foreground_intensities_statistics_per_channel
+                    "foreground_intensity_properties_per_channel": intensities_statistics_per_channel
                 }
 
                 normalization_schemes = [
@@ -546,6 +556,8 @@ class DatasetFingerprintExtractor(object):
                 }
 
                 try:
+                    recursive_fix_for_json_export(fingerprint)
+                    recursive_fix_for_json_export(plans)
                     save_json(fingerprint, properties_file)
                     save_json(plans, plans_file)
                     data_split = self.save_dataset_split_json(dataset_split_file)

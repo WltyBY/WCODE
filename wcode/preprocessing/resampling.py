@@ -4,20 +4,7 @@ from scipy import ndimage
 from typing import Union, Tuple, List
 
 
-ANISO_THRESHOLD = 3
-
-def whether_anisotropy(
-    spacing: Union[Tuple[float, ...], List[float], np.ndarray],
-    anisotropy_threshold=ANISO_THRESHOLD,
-):
-    anisotropy_flag = (np.max(spacing) / np.min(spacing)) > anisotropy_threshold
-    return anisotropy_flag
-
-
-def get_lowres_axis(new_spacing: Union[Tuple[float, ...], List[float], np.ndarray]):
-    # find which axis is anisotropic
-    axis = np.argmax(new_spacing)
-    return axis
+ANISO_THRESHOLD = 3.0
 
 
 def compute_new_shape(
@@ -33,117 +20,178 @@ def compute_new_shape(
     return new_shape
 
 
-def resample_ND_data_to_given_spacing(data, origin_spacing, target_spacing, is_seg):
+def resample_ND_data_to_given_spacing(
+    data: np.ndarray,
+    original_spacing: List[float],
+    target_spacing: List[float],
+    is_seg=False,
+):
     """
-    Resample an image/seg array (z, y, x) to a given spacing. 
+    Resample an image/seg array (z, y, x) to a given spacing.
 
     :param data: The input image/seg array.
     :param origin_spacing: Original spacing along x, y, z direction.
     :param target_spacing: (list/tuple) Target spacing along x, y, z direction.
     :param order: (int) Order for interpolation.
 
-    :return: A resampled image/seg array.
+    :return: A resampled image/seg array in z, y, x order.
     """
     assert data.ndim == 3
-    zoom = [origin_spacing[i] / target_spacing[i] for i in range(3)]
-    zoom = [zoom[2], zoom[1], zoom[0]]
+
+    original_spacing = np.array(original_spacing)[::-1]
+    target_spacing = np.array(target_spacing)[::-1]
+    zoom_factors = original_spacing / target_spacing
 
     if is_seg:
-        return ndimage.interpolation.zoom(data, zoom, order=0)
+        return ndimage.zoom(data, zoom_factors, order=0)
+
+    is_aniso = original_spacing.max() / original_spacing.min() > ANISO_THRESHOLD
+
+    if is_aniso:
+        lowres_axes = [
+            i
+            for i in range(len(original_spacing))
+            if original_spacing[i] / original_spacing.min() > ANISO_THRESHOLD
+        ]
+
+        # high-res axes: cubic
+        zoom_hr = [
+            zoom_factors[i] if i not in lowres_axes else 1.0
+            for i in range(len(zoom_factors))
+        ]
+        data = ndimage.zoom(data, zoom_hr, order=3)
+
+        # low-res axes: linear
+        zoom_lr = [
+            zoom_factors[i] if i in lowres_axes else 1.0
+            for i in range(len(zoom_factors))
+        ]
+        data = ndimage.zoom(data, zoom_lr, order=1)
     else:
-        return ndimage.interpolation.zoom(data, zoom, order=3)
+        data = ndimage.zoom(data, zoom_factors, order=3)
+
+    return data
 
 
-def resample_ND_data_to_given_shape(data, out_shape, is_seg):
+def resample_ND_data_to_given_shape(
+    data: np.ndarray, target_shape: List, current_spacing: List = None, is_seg=False
+):
+    """
+    data in (z, y, x)
+    target_shape in (z, y, x)
+    current_spacing in (x, y, z), can be None
+    """
     assert data.ndim == 3
-    shape0 = data.shape
-    assert len(shape0) == len(out_shape)
-    scale = [(out_shape[i] + 0.0) / shape0[i] for i in range(len(shape0))]
+
+    original_shape = np.array(data.shape)
+    target_shape = np.array(target_shape)
+    assert len(original_shape) == len(target_shape)
+
+    zoom_factors = target_shape / original_shape
 
     if is_seg:
-        return ndimage.interpolation.zoom(data, scale, order=0)
+        return ndimage.zoom(data, zoom_factors, order=0)
+
+    if current_spacing is None:
+        return ndimage.zoom(data, zoom_factors, order=3)
     else:
-        return ndimage.interpolation.zoom(data, scale, order=3)
+        # x, y, z to z, y, x
+        current_spacing = np.array(current_spacing)[::-1]
+        is_aniso = current_spacing.max() / current_spacing.min() > ANISO_THRESHOLD
+        if is_aniso:
+            lowres_axes = [
+                i
+                for i in range(len(current_spacing))
+                if current_spacing[i] / current_spacing.min() > ANISO_THRESHOLD
+            ]
+
+            # high-res axes cubic
+            zoom_hr = [
+                zoom_factors[i] if i not in lowres_axes else 1.0
+                for i in range(len(zoom_factors))
+            ]
+            data = ndimage.zoom(data, zoom_hr, order=3)
+
+            # low-res axes linear
+            zoom_lr = [
+                zoom_factors[i] if i in lowres_axes else 1.0
+                for i in range(len(zoom_factors))
+            ]
+            data = ndimage.zoom(data, zoom_lr, order=1)
+        else:
+            data = ndimage.zoom(data, zoom_factors, order=3)
+
+    return data
 
 
-def resample_npy_with_channels_on_spacing(data, origin_spacing, target_spacing, channel_names):
+def resample_npy_with_channels_on_spacing(
+    data: np.ndarray,
+    original_spacing: List[float],
+    target_spacing: List[float],
+    channel_names: List[str],
+    shapes: List[List[int]],
+):
+    """
+    resample_npy_with_channels_on_spacing is only used during preprocessing
+
+    data: 4D np array with shape (C, Z, Y, X)
+    original_spacing/target_spacing: in x, y, z order but data in z, y, x order
+    channel_names: Dict, names of each modality
+    shapes: shapes of each modality
+
+    ##### Do not use it in other places #####
+    """
     assert data.ndim == 4
+    # x, y, z to z, y, x
+    original_spacing = np.array(original_spacing)[::-1]
+    target_spacing = np.array(target_spacing)[::-1]
+    
+    is_aniso = original_spacing.max() / original_spacing.min() > ANISO_THRESHOLD
+    # Determine whether it is anisotropic in each dimension
+    lowres_axes = [
+        i
+        for i in range(len(original_spacing))
+        if original_spacing[i] / original_spacing.min() > ANISO_THRESHOLD
+    ]
+    zoom_factors = original_spacing / target_spacing
 
-    zoom = [origin_spacing[i] / target_spacing[i] for i in range(3)]
-    zoom = [zoom[2], zoom[1], zoom[0]]
+    channel_lst = []
+    for shape in shapes:
+        channel_lst.append(shape[0])
+    cumsum_id = np.cumsum(channel_lst)
     data_resampled = []
-    for i, channel_name in enumerate(channel_names):
-        if any(True if s in channel_name else False for s in ["mask", "label", "seg"]):
+    for c in range(data.shape[0]):
+        modality_id = (cumsum_id > c).tolist().index(True)
+        channel_name = channel_names[str(modality_id)]
+        if any(
+            True if s in channel_name.lower() else False
+            for s in ["mask", "label", "seg"]
+        ):
             is_seg = True
         else:
             is_seg = False
-        
+
+        data_this = data[c]
         if is_seg:
-            data_resampled.append(
-                ndimage.interpolation.zoom(data[i], zoom, order=0)[None]
-            )
+            data_this = ndimage.zoom(data_this, zoom_factors, order=0)
         else:
-            data_resampled.append(
-                ndimage.interpolation.zoom(data[i], zoom, order=3)[None]
-            )
-    data_resampled = np.vstack(data_resampled)
+            if is_aniso:
+                # step 1: cubic (order=3) on all high-res axes
+                zoom_hr = [
+                    zoom_factors[i] if i not in lowres_axes else 1.0
+                    for i in range(len(zoom_factors))
+                ]
+                data_this = ndimage.zoom(data_this, zoom_hr, order=3)
 
-    return data_resampled
+                # step 2: linear on all low-res axes
+                zoom_lr = [
+                    zoom_factors[i] if i in lowres_axes else 1.0
+                    for i in range(len(zoom_factors))
+                ]
+                data_this = ndimage.zoom(data_this, zoom_lr, order=1)              
+            else:
+                data_this = ndimage.zoom(data_this, zoom_factors, order=3)
 
+        data_resampled.append(data_this[None])
 
-def resample_npy_with_channels_on_shape(data, target_shape, channel_names):
-    assert data.ndim == 4
-    shape0 = data.shape[1:]
-    assert len(shape0) == len(target_shape)
-
-    scale = [(target_shape[i] + 0.0) / shape0[i] for i in range(len(shape0))]
-
-    data_resampled = []
-    for i, channel_name in enumerate(channel_names):
-        if any(True if s in channel_name else False for s in ["mask", "label", "seg"]):
-            is_seg = True
-        else:
-            is_seg = False
-
-        if is_seg:
-            data_resampled.append(
-                ndimage.interpolation.zoom(data[i], scale, order=0)[None]
-            )
-        else:
-            data_resampled.append(
-                ndimage.interpolation.zoom(data[i], scale, order=3)[None]
-            )
-    data_resampled = np.vstack(data_resampled)
-
-    return data_resampled
-
-
-if __name__ == "__main__":
-    image_path = "./Dataset/RADCURE/images/RADCURE-3953_0000.nii.gz"
-    img_output_path = "./Dataset_preprocessed/RADCURE/RADCURE-3953_0000.nii.gz"
-    seg_path = "./Dataset/RADCURE/labels/RADCURE-3953.nii.gz"
-    seg_output_path = "./Dataset_preprocessed/RADCURE/RADCURE-3953.nii.gz"
-    import SimpleITK as sitk
-
-    itk_obj = sitk.ReadImage(image_path)
-    print(itk_obj.GetSpacing())
-    data = sitk.GetArrayFromImage(itk_obj)
-    data_resampled = resample_ND_data_to_given_spacing(
-        data, itk_obj.GetSpacing(), [0.9760000109672546, 0.9760000109672546, 2.0], False
-    )
-    output_obj = sitk.GetImageFromArray(data_resampled)
-    output_obj.SetDirection(itk_obj.GetDirection())
-    output_obj.SetOrigin(itk_obj.GetOrigin())
-    output_obj.SetSpacing([0.9760000109672546, 0.9760000109672546, 2.0])
-    sitk.WriteImage(output_obj, img_output_path)
-
-    itk_obj = sitk.ReadImage(seg_path)
-    data = sitk.GetArrayFromImage(itk_obj)
-    data_resampled = resample_ND_data_to_given_spacing(
-        data, itk_obj.GetSpacing(), [0.9760000109672546, 0.9760000109672546, 2.0], True
-    )
-    output_obj = sitk.GetImageFromArray(data_resampled)
-    output_obj.SetDirection(itk_obj.GetDirection())
-    output_obj.SetOrigin(itk_obj.GetOrigin())
-    output_obj.SetSpacing([0.9760000109672546, 0.9760000109672546, 2.0])
-    sitk.WriteImage(output_obj, seg_output_path)
+    return np.vstack(data_resampled)

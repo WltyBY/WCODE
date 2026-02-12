@@ -17,7 +17,7 @@ from wcode.inferring.utils.metrics import (
 )
 from wcode.utils.file_operations import save_json, open_yaml
 from wcode.utils.json_export import recursive_fix_for_json_export
-from wcode.utils.data_io import files_ending_for_sitk, files_ending_for_2d_img
+from wcode.utils.data_io import file_endings_for_sitk, file_endings_for_2d_img
 
 
 class Evaluator:
@@ -30,7 +30,8 @@ class Evaluator:
         prediction_folder,
         ground_truth_folder,
         dataset_yaml_or_its_path,
-        num_processes=8,
+        instance_level_metrics=False,
+        num_workers=8,
     ):
         self.prediction_folder = prediction_folder
         self.ground_truth_folder = ground_truth_folder
@@ -39,7 +40,8 @@ class Evaluator:
             self.dataset_yaml = open_yaml(dataset_yaml_or_its_path)
         self.value_fg_class = [i for i in self.dataset_yaml["labels"].values()][1:]
         self.files_ending = self.dataset_yaml["files_ending"]
-        self.num_processes = num_processes
+        self.instance_level_metrics = instance_level_metrics
+        self.num_workers = num_workers
 
     def run(self, cross_dataset=False):
         pred_file_set = set(
@@ -66,20 +68,20 @@ class Evaluator:
         gt_dataset = list(gt_file_set)[0].split("_")[0]
 
         r = []
-        with multiprocessing.get_context("spawn").Pool(self.num_processes) as p:
+        with multiprocessing.get_context("spawn").Pool(self.num_workers) as p:
             for pred in pred_file_set:
                 prediction_file = os.path.join(self.prediction_folder, pred)
                 reference_file = os.path.join(
                     self.ground_truth_folder, pred.replace(pred_dataset, gt_dataset)
                 )
-                if self.files_ending in files_ending_for_sitk:
+                if self.files_ending in file_endings_for_sitk:
                     pred_obj = sitk.ReadImage(prediction_file)
                     gt_obj = sitk.ReadImage(reference_file)
 
                     pred_array = sitk.GetArrayFromImage(pred_obj)
                     gt_array = sitk.GetArrayFromImage(gt_obj)
                     spacing = pred_obj.GetSpacing()[::-1]
-                elif self.files_ending in files_ending_for_2d_img:
+                elif self.files_ending in file_endings_for_2d_img:
                     pred_img = cv2.imread(prediction_file)
                     # gt_array = cv2.imread(reference_file).transpose(2, 0, 1)
                     gt_img = cv2.imread(reference_file)
@@ -202,37 +204,38 @@ class Evaluator:
             results[r]["ASSD"] = ASSD(pred_mask, gt_mask, spacing=spacing)
             results[r]["HD95"] = HD95(pred_mask, gt_mask, spacing=spacing)
 
-            IoU_lst = list(np.arange(0.05, 0.51, 0.05))
-            ap_values, f1_values = region_level_metrics_no_conf(
-                pred_mask,
-                gt_mask,
-                connectivity=pred_mask.ndim,
-                IoU_thresholds=IoU_lst,
-                method="interp",
-            )
-            for i, threshold in enumerate(IoU_lst):
-                (
-                    results[r]["AP@{:.2f}".format(threshold)],
-                    results[r]["F1 score@{:.2f}".format(threshold)],
-                ) = (ap_values[i], f1_values[i])
-            results[r][
-                "AP@[{:.2f}:{:.2f}:{:.2f}]".format(
-                    IoU_lst[0], IoU_lst[1] - IoU_lst[0], IoU_lst[-1]
+            if self.instance_level_metrics:
+                IoU_lst = list(np.arange(0.05, 0.51, 0.05))
+                ap_values, f1_values = region_level_metrics_no_conf(
+                    pred_mask,
+                    gt_mask,
+                    connectivity=pred_mask.ndim,
+                    IoU_thresholds=IoU_lst,
+                    method="interp",
                 )
-            ] = np.mean(ap_values)
-            results[r][
-                "F1 score@[{:.2f}:{:.2f}:{:.2f}]".format(
-                    IoU_lst[0], IoU_lst[1] - IoU_lst[0], IoU_lst[-1]
-                )
-            ] = np.mean(f1_values)
+                for i, threshold in enumerate(IoU_lst):
+                    (
+                        results[r]["AP@{:.2f}".format(threshold)],
+                        results[r]["F1 score@{:.2f}".format(threshold)],
+                    ) = (ap_values[i], f1_values[i])
+                results[r][
+                    "AP@[{:.2f}:{:.2f}:{:.2f}]".format(
+                        IoU_lst[0], IoU_lst[1] - IoU_lst[0], IoU_lst[-1]
+                    )
+                ] = np.mean(ap_values)
+                results[r][
+                    "F1 score@[{:.2f}:{:.2f}:{:.2f}]".format(
+                        IoU_lst[0], IoU_lst[1] - IoU_lst[0], IoU_lst[-1]
+                    )
+                ] = np.mean(f1_values)
 
         return prediction_file, results
 
 
 # if __name__ == "__main__":
-#     dataset_yaml = "./"
-#     prediction_folder = "./"
-#     ground_truth_folder = "./"
+#     dataset_yaml = "./Dataset_preprocessed/LNQ2023/dataset.yaml"
+#     prediction_folder = "./Logs/LNQ2023/only_P1/0_tversky_alpha_0.3_awce_beta_1.0_consis_weight_0.1_rampup_epoch_100_update_way_least_select_way_merge_num_prototype_2_memory_rate_0.999/fold_0/test_best"
+#     ground_truth_folder = "./Dataset/LNQ2023/labelsTs"
 #     eva = Evaluator(
 #         prediction_folder, ground_truth_folder, dataset_yaml
 #     )
@@ -240,9 +243,10 @@ class Evaluator:
 
 
 if __name__ == "__main__":
-    dataset_yaml = "./"
-    log_folder = "./"
-    ground_truth_folder = "./"
+    dataset_yaml = "./Dataset_preprocessed/CTLymphNodes02/dataset.yaml"
+    log_folder = "./Logs/CTLymphNodes02/BS8/tversky_alpha_0.4_awce_beta_1.0_consis_weight_1.0_rampup_epoch_100_update_way_least_select_way_merge_num_prototype_3_memory_rate_0.999"
+    ground_truth_folder = "./Dataset/CTLymphNodes/labels"
+    # ground_truth_folder = "./Logs/labels"
     import os
     from os.path import join as osjoin
     for folder in os.listdir(log_folder):

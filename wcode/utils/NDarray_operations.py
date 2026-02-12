@@ -1,5 +1,6 @@
 import numpy as np
 from scipy import ndimage
+from typing import Dict, List
 
 
 def get_ND_bounding_box(volume, margin=None):
@@ -140,3 +141,64 @@ def create_h_component_image(image):
     image_h = image_out[:, :, 0].astype(np.uint8)
 
     return image_h
+
+
+def rgb_seg_to_index(
+    seg: np.ndarray,
+    label_dict: Dict[str, List[int]],
+    ignore_label: int = 0,
+):
+    """
+    Convert an RGB-like segmentation map to class indices.
+
+    Parameters
+    ----------
+    seg : np.ndarray
+        Segmentation array of shape (3, H, W) or (H, W, 3), dtype uint8 or int.
+    label_dict : dict
+        Mapping from label name to RGB value, e.g.
+        {
+            "background": [0, 0, 0], -> 0
+            "car": [255, 255, 0], -> 1
+            "people": [0, 255, 0]  -> 2
+        }
+    ignore_label : int
+        Class index to use for unknown / unmatched colors.
+
+    Returns
+    -------
+    seg_idx : np.ndarray
+        Segmentation map of shape (1, H, W), dtype int32
+    """
+
+    assert seg.ndim in (3,), "seg must in c, h, w"
+
+    # Ensure HWC
+    if seg.shape[0] == 3:
+        seg_hwc = seg.transpose(1, 2, 0)
+    else:
+        seg_hwc = seg
+
+    seg_hwc = seg_hwc.astype(np.int32)
+    h, w, _ = seg_hwc.shape
+
+    # Pack RGB -> int: 0xRRGGBB
+    seg_int = (seg_hwc[..., 0] << 16) | (seg_hwc[..., 1] << 8) | seg_hwc[..., 2]
+
+    # Build LUT: packed RGB -> class index
+    color_to_index = {}
+    for idx, (_, rgb) in enumerate(label_dict.items()):
+        r, g, b = rgb
+        packed = (r << 16) | (g << 8) | b
+        color_to_index[packed] = idx
+
+    # Vectorized mapping
+    seg_flat = seg_int.reshape(-1)
+    seg_idx_flat = np.full(seg_flat.shape, ignore_label, dtype=np.int32)
+
+    for packed_color, class_idx in color_to_index.items():
+        seg_idx_flat[seg_flat == packed_color] = class_idx
+
+    seg_idx = seg_idx_flat.reshape(h, w)[None, ...]
+
+    return seg_idx

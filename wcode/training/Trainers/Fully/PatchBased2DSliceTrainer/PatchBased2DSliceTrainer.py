@@ -1,11 +1,11 @@
 import os
 import torch
 import numpy as np
+import torch.distributed as dist
 
 from torch import autocast
 from torch.amp import GradScaler
 from datetime import datetime
-from typing import Union
 
 from wcode.training.Trainers.Fully.PatchBasedTrainer.PatchBasedTrainer import (
     PatchBasedTrainer,
@@ -20,28 +20,35 @@ from wcode.training.logs_writer.logger_for_segmentation import logger
 class PatchBased2DSliceTrainer(PatchBasedTrainer):
     def __init__(
         self,
-        config_file_path: str,
-        fold: int,
-        w_ce: float,
-        w_dice: float,
-        w_class: Union[None, list],
+        training_args,
         verbose: bool = False,
     ):
+        self.training_args = training_args
+
+        self.verbose = verbose
+        config_file_path = os.path.join("./Configs", self.training_args.setting)
+        self.config_dict = open_yaml(config_file_path)
+
+        self.get_train_settings()
+        self.device = self.get_device()
+
+        # Task-general params
+        task_general_names = "BS_{}_GPU_NUM_{}_SEED_{}_PRETRAINED_{}".format(
+            self.batch_size,
+            self.world_size,
+            self.random_seed,
+            self.pretrained_weight is not None,
+        )
+
         # hyperparameter
-        self.w_ce = w_ce
-        self.w_dice = w_dice
-        self.w_class = w_class
+        self.w_ce = self.training_args.w_ce
+        self.w_dice = self.training_args.w_dice
+        self.w_class = self.training_args.w_class
         hyperparams_name = "w_ce_{}_w_dice_{}_w_class_{}".format(
             self.w_ce, self.w_dice, self.w_class
         )
 
-        self.verbose = verbose
-        self.config_dict = open_yaml(config_file_path)
-        if self.config_dict.__contains__("Inferring_settings"):
-            del self.config_dict["Inferring_settings"]
-
-        self.get_train_settings(self.config_dict["Training_settings"])
-        self.fold = str(fold)
+        self.fold = self.training_args.fold
         self.allow_mirroring_axes_during_inference = None
 
         self.was_initialized = False
@@ -56,29 +63,48 @@ class PatchBased2DSliceTrainer(PatchBasedTrainer):
             timestamp.minute,
             timestamp.second,
         )
-        log_folder_name = self.method_name if self.method_name is not None else time_
+        assert self.method_name is not None
         self.logs_output_folder = os.path.join(
-            "./Logs",
+            "./Log",
             self.dataset_name,
-            log_folder_name,
+            self.preprocess_config.upper() + "__" + self.method_name,
+            task_general_names,
             hyperparams_name,
             "fold_" + self.fold,
         )
+        if not os.path.exists(self.logs_output_folder):
+            os.makedirs(self.logs_output_folder, exist_ok=True)
+
+        self.log_file = os.path.join(self.logs_output_folder, time_ + ".txt")
+        with open(self.log_file, "w"):
+            pass
+
+        self.print_to_log_file(
+            f"Using device: {self.device} | DDP: {self.is_ddp} | rank {self.rank}/{self.world_size}"
+        )
+
+        # Save the config file and Trainer file to the logs folder
         config_and_code_save_path = os.path.join(
             self.logs_output_folder, "Config_and_code"
         )
-        if not os.path.exists(config_and_code_save_path):
-            os.makedirs(config_and_code_save_path)
-        print("Training logs will be saved in:", self.logs_output_folder)
-
-        # copy the config file to the logs folder
-        copy_file_to_dstFolder(config_file_path, config_and_code_save_path)
-
-        # copy the trainer file to the logs folder
         script_path = os.path.abspath(__file__)
-        copy_file_to_dstFolder(script_path, config_and_code_save_path)
 
-        self.log_file = os.path.join(self.logs_output_folder, time_ + ".txt")
+        if self.is_main_process():
+            os.makedirs(config_and_code_save_path, exist_ok=True)
+
+            # copy the config file to the logs folder
+            copy_file_to_dstFolder(config_file_path, config_and_code_save_path)
+
+            # copy the trainer file to the logs folder
+            copy_file_to_dstFolder(script_path, config_and_code_save_path)
+
+            self.print_to_log_file(
+                "Training logs will be saved in:", self.logs_output_folder
+            )
+
+        if self.is_ddp:
+            dist.barrier(device_ids=[self.device.index])
+
         self.logger = logger()
 
         self.current_epoch = 0
@@ -87,11 +113,18 @@ class PatchBased2DSliceTrainer(PatchBasedTrainer):
         self.save_every = 1
         self.disable_checkpointing = False
 
-        self.device = self.get_device()
         self.grad_scaler = GradScaler() if self.device.type == "cuda" else None
 
-        if self.checkpoint_path is not None:
-            self.load_checkpoint(self.checkpoint_path)
+        if self.continue_train:
+            checkpoint = os.path.join(self.logs_output_folder, "checkpoint_latest.pth")
+            if not os.path.isfile(checkpoint):
+                raise FileNotFoundError(
+                    f"Continue training was requested but checkpoint not found: {checkpoint}"
+                )
+            self.load_checkpoint(checkpoint)
+
+            if self.is_ddp:
+                dist.barrier(device_ids=[self.device.index])
 
     def configure_rotation_dummyDA_mirroring_and_inital_patch_size(self):
         patch_size = self.patch_size
@@ -120,7 +153,7 @@ class PatchBased2DSliceTrainer(PatchBasedTrainer):
                 )
             else:
                 rotation_for_DA = (-30.0 / 360 * 2.0 * np.pi, 30.0 / 360 * 2.0 * np.pi)
-            mirror_axes = (0, 1, 2)
+            mirror_axes = (0, 1)
         else:
             raise RuntimeError()
 
@@ -146,26 +179,25 @@ class PatchBased2DSliceTrainer(PatchBasedTrainer):
         images = batch["image"]
         labels = batch["label"]
 
+        _, C, _, Y, X = images.shape
+        _, C_label, _, _, _ = labels.shape
+
         # to device
-        images = torch.vstack(
-            [images[i].permute(1, 0, 2, 3) for i in range(images.size()[0])]
-        )
+        images = images.permute(0, 2, 1, 3, 4).reshape(-1, C, Y, X)
         images = images.to(self.device, non_blocking=True)
         if isinstance(labels, list):
             labels = [
-                torch.vstack(
-                    [label[i].permute(1, 0, 2, 3) for i in range(label.size()[0])]
-                )
+                label.permute(0, 2, 1, 3, 4).reshape(-1, C_label, Y, X)
                 for label in labels
             ]
             labels = [i.to(self.device, non_blocking=True) for i in labels]
         else:
-            labels = torch.vstack(
-                [labels[i].permute(1, 0, 2, 3) for i in range(labels.size()[0])]
+            labels = (
+                labels.permute(0, 2, 1, 3, 4).reshape(-1, C_label, Y, X)
             )
             labels = labels.to(self.device, non_blocking=True)
 
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         with (
             autocast(self.device.type, enabled=True)
             if self.device.type == "cuda"
@@ -195,23 +227,14 @@ class PatchBased2DSliceTrainer(PatchBasedTrainer):
         images = batch["image"]
         labels = batch["label"]
 
-        images = torch.vstack(
-            [images[i].permute(1, 0, 2, 3) for i in range(images.size()[0])]
-        )
+        B, C, Z, Y, X = images.shape
+
+        # just reshape images to 2D slices, but keep labels in 3D for validation (we will compute metrics in 3D)
+        images = images.permute(0, 2, 1, 3, 4).reshape(-1, C, Y, X)
         images = images.to(self.device, non_blocking=True)
         if isinstance(labels, list):
-            labels = [
-                torch.vstack(
-                    [label[i].permute(1, 0, 2, 3) for i in range(label.size()[0])]
-                )
-                for label in labels
-            ]
             labels = [i.to(self.device, non_blocking=True) for i in labels]
-
         else:
-            labels = torch.vstack(
-                [labels[i].permute(1, 0, 2, 3) for i in range(labels.size()[0])]
-            )
             labels = labels.to(self.device, non_blocking=True)
 
         with (
@@ -222,7 +245,24 @@ class PatchBased2DSliceTrainer(PatchBasedTrainer):
             outputs = self.network(images)
             if isinstance(outputs, dict):
                 outputs = outputs["pred"]
+
+            if isinstance(outputs, (list, tuple)):
+                restored_outputs = []
+
+                for out in outputs:
+                    _, num_classes, y, x = out.shape
+                    out = out.reshape(B, Z, num_classes, y, x).permute(0, 2, 1, 3, 4)
+                    restored_outputs.append(out)
+
+                outputs = restored_outputs
+            else:
+                _, num_classes, y, x = outputs.shape
+                outputs = outputs.reshape(B, Z, num_classes, y, x).permute(
+                    0, 2, 1, 3, 4
+                )
+
             del images
+
             l = self.val_loss(outputs, labels)
 
         # use the new name of outputs and labels, so that you only need to change the network inference process

@@ -6,7 +6,7 @@ import random
 import numpy as np
 
 from time import sleep
-from typing import Union, List
+from typing import Union, List, Dict
 from tqdm import tqdm
 
 from wcode.preprocessing.cropping import crop_to_mask
@@ -19,10 +19,11 @@ from wcode.utils.file_operations import open_yaml, save_pickle, open_json
 from wcode.utils.data_io import (
     read_sitk_case,
     read_2d_img,
-    files_ending_for_sitk,
-    files_ending_for_2d_img,
+    file_endings_for_sitk,
+    file_endings_for_2d_img,
     create_lists_from_splitted_dataset_folder,
 )
+from wcode.utils.NDarray_operations import rgb_seg_to_index
 
 
 class Preprocessor(object):
@@ -33,7 +34,7 @@ class Preprocessor(object):
         random.seed(random_seed)
         np.random.seed(random_seed)
         os.environ["PYTHONHASHSEED"] = str(random_seed)
-        
+
         if dataset_name:
             self.dataset_figureprint = open_json(
                 os.path.join(
@@ -51,10 +52,10 @@ class Preprocessor(object):
                 "You should provide dataset_name to get dataset_figureprint.json and dataset.yaml"
             )
 
-        if self.dataset_yaml["files_ending"] in files_ending_for_sitk:
+        if self.dataset_yaml["files_ending"] in file_endings_for_sitk:
             self.img_Reader = read_sitk_case
             self.general_img_flag = False
-        elif self.dataset_yaml["files_ending"] in files_ending_for_2d_img:
+        elif self.dataset_yaml["files_ending"] in file_endings_for_2d_img:
             self.img_Reader = read_2d_img
             self.general_img_flag = True
         else:
@@ -69,11 +70,24 @@ class Preprocessor(object):
         properties: dict,
         preprocess_config: str,
     ):
+        """
+        3D image preprocessing: crop -> normalize -> resample
+
+        data, seg in (c, z, y, x) for 3D image.
+        properties: {
+            "spacing": spacings in x, y, z,
+            "direction": ...,
+            "origin": ...,
+            "shapes": [(c, z, y, x), ...],
+            "target_spacing": in x, y, z (Addtionally added after reading plan.json),
+        }
+        preprocess_config: "3d" or "2d". when "2d", we do not resample in z axis.
+        """
         data = np.copy(data)
         if seg is not None:
             assert (
                 data.shape[1:] == seg.shape[1:]
-            ), "Shape mismatch between image and segmentation. Please fix your dataset and make use of the --verify_dataset_integrity flag to ensure everything is correct"
+            ), "Shape mismatch between image and segmentation."
             seg = np.copy(seg)
 
         # crop
@@ -91,14 +105,15 @@ class Preprocessor(object):
             foreground_intensity_properties_per_channel=self.dataset_figureprint[
                 "foreground_intensity_properties_per_channel"
             ],
-            shapes=None,
+            shapes=properties["shapes"],
         )
-
+        
         # resample
         original_spacing = properties["spacing"]
         target_spacing = properties["target_spacing"]
 
         if preprocess_config == "2d":
+            # will not perform resampling along the z-axis
             target_spacing[-1] = original_spacing[-1]
 
         old_shape = data.shape[1:]
@@ -107,11 +122,16 @@ class Preprocessor(object):
             data,
             original_spacing,
             target_spacing,
-            channel_names=self.dataset_yaml["channel_names"].values(),
+            channel_names=self.dataset_yaml["channel_names"],
+            shapes=properties["shapes"],
         )
         if seg is not None:
             seg = resample_npy_with_channels_on_spacing(
-                seg, original_spacing, target_spacing, channel_names=["label"]
+                seg,
+                original_spacing,
+                target_spacing,
+                channel_names={'0': "label"},
+                shapes=[seg.shape],
             )
 
         if self.verbose:
@@ -128,31 +148,35 @@ class Preprocessor(object):
         seg: Union[np.ndarray, None],
         properties: dict,
     ):
-        # properties are the shapes of images from all modelities for 2d image.
-        # properties: {"shapes": (c, h, w)}
+        """
+        data in c, h, w for 2D image.
+        seg: mostly in 3, h, w for 2D image.
+        properties are the shapes of images from all modelities for 2d image.
+        properties: {"shapes": [(c, h, w), ...]}
+        """
         data = np.copy(data)
         if seg is not None:
             assert (
                 data.shape[1:] == seg.shape[1:]
-            ), "Shape mismatch between image and segmentation. Please fix your dataset and make use of the --verify_dataset_integrity flag to ensure everything is correct"
+            ), "Shape mismatch between image and segmentation."
             seg = np.copy(seg)
+
+            # mapping label values from RGB-like to 0, 1, 2, ...
+            ## 3, h, w to 1, h, w
+            seg = rgb_seg_to_index(seg, self.dataset_yaml['labels'])
 
         # normalize
         data = self._normalize(
             data,
             seg,
             self.plans_json,
-            foreground_intensity_properties_per_channel=None,
+            foreground_intensity_properties_per_channel=self.dataset_figureprint[
+                "foreground_intensity_properties_per_channel"
+            ],
             shapes=properties["shapes"],
         )
 
-        # process seg, seg_new from c, h, w to h, w, c
-        seg_new = np.zeros_like(seg.transpose(1, 2, 0))
-        for i, key in enumerate(self.dataset_yaml["labels"].keys()):
-            label = np.array(self.dataset_yaml["labels"][key])
-            seg_new[seg.transpose(1, 2, 0) == label] = i
-
-        return data, seg_new.transpose(2, 0, 1)[0][None]
+        return data, seg
 
     def run_case(
         self,
@@ -179,7 +203,7 @@ class Preprocessor(object):
             else:
                 seg = cv2.cvtColor(
                     cv2.imread(seg_file[0]), cv2.COLOR_BGR2RGB
-                ).transpose(2, 0, 1)
+                ).transpose(2, 0, 1)  # 1, h, w or 3, h, w
         else:
             seg = None
 
@@ -187,7 +211,7 @@ class Preprocessor(object):
             data, seg = self.run_case_npy(data, seg, data_properties, preprocess_config)
         else:
             data, seg = self.run_2d_img_npy(data, seg, data_properties)
-        
+
         if np.max(seg) > 127:
             seg = seg.astype(np.int16)
         else:
@@ -195,91 +219,67 @@ class Preprocessor(object):
 
         return data, seg, data_properties
 
-    def run_case_save(
-        self,
-        output_filename_truncated: str,
-        image_files: List[str],
-        seg_file: str,
-        preprocess_config: str,
-    ):
-        data, seg, properties = self.run_case(image_files, seg_file, preprocess_config)
-        properties["oversample"] = self._sample_foreground_locations(
-            seg, output_filename_truncated
-        )
-
-        np.save(output_filename_truncated + ".npy", arr=data)
-        np.save(output_filename_truncated + "_seg.npy", arr=seg)
-        save_pickle(properties, output_filename_truncated + ".pkl")
-
     def _normalize(
         self,
         data: np.ndarray,
-        seg: np.ndarray,
-        dataset_configuration: dict,
-        foreground_intensity_properties_per_channel: dict,
-        shapes: dict,
+        seg: Union[np.ndarray, None],
+        dataset_configuration: Dict,
+        foreground_intensity_properties_per_channel: Dict,
+        shapes: List,
     ) -> np.ndarray:
-        if (foreground_intensity_properties_per_channel is None) and (shapes is None):
-            raise ValueError("Only one of them can be None")
-        if (foreground_intensity_properties_per_channel is not None) and (
+        assert (foreground_intensity_properties_per_channel is not None) and (
             shapes is not None
-        ):
-            raise ValueError("Only one of them can not be None")
+        ), "Both shapes and foreground_intensity_properties_per_channel should be provided."
 
-        if foreground_intensity_properties_per_channel is not None:
-            for c in range(data.shape[0]):
-                scheme = dataset_configuration["normalization_schemes"][c]
-                normalizer_class = normalization_schemes_to_object[scheme]
-                if normalizer_class is None:
-                    raise RuntimeError(
-                        "Unable to locate class '%s' for normalization" % scheme
-                    )
+        if seg.shape[0] == 1:
+            seg_ = seg
+        else:
+            assert seg.shape[0] >= 1, "seg shape is incorrect."
+            seg_ = np.zeros_like(seg[0], dtype=np.bool_)
+            for c in range(seg.shape[0]):
+                seg_ = np.logical_or(seg_, seg[c] > 0)
+            seg_ = seg_[None].astype(np.int8)
 
-                normalizer = normalizer_class(
-                    use_mask_for_norm=self.plans_json["use_mask_for_norm"][c],
-                    intensityproperties=foreground_intensity_properties_per_channel[
-                        str(c)
-                    ],
+        channel_lst = []
+        for shape in shapes:
+            channel_lst.append(shape[0])
+        cumsum_id = np.cumsum(channel_lst)
+        for c in range(data.shape[0]):
+            normalizer_id = (cumsum_id > c).tolist().index(True)
+            scheme = dataset_configuration["normalization_schemes"][normalizer_id]
+
+            normalizer_class = normalization_schemes_to_object[scheme]
+
+            if normalizer_class is None:
+                raise RuntimeError(
+                    "Unable to locate class '%s' for normalization" % scheme
                 )
-                data[c] = normalizer.run(data[c], seg[0])
-        elif shapes is not None:
-            channel_lst = []
-            for shape in shapes:
-                channel_lst.append(shape[0])
-            cumsum_id = np.cumsum(channel_lst)
-            for c in range(data.shape[0]):
-                normalizer_id = (cumsum_id > c).tolist().index(True)
-                scheme = dataset_configuration["normalization_schemes"][normalizer_id]
 
-                normalizer_class = normalization_schemes_to_object[scheme]
-                if normalizer_class is None:
-                    raise RuntimeError(
-                        "Unable to locate class '%s' for normalization" % scheme
-                    )
-
-                normalizer = normalizer_class(
-                    use_mask_for_norm=self.plans_json["use_mask_for_norm"][
-                        normalizer_id
-                    ],
-                    intensityproperties={},
-                )
-                data[c] = normalizer.run(data[c], seg[0])
+            normalizer = normalizer_class(
+                use_mask_for_norm=self.plans_json["use_mask_for_norm"][normalizer_id],
+                intensityproperties=foreground_intensity_properties_per_channel[str(c)],
+            )
+            data[c] = normalizer.run(data[c], seg_[0])
 
         return data
 
-    def _sample_foreground_locations(
-        self, seg: np.ndarray, name, num_samples=10000, seed: int = 319
+    def _sample_locations_for_class(
+        self, seg: np.ndarray, num_samples=10000, seed: int = 319
     ):
-        # seg in (c, z, y, x)
-        # At least 1% of the class voxels need to be selected, otherwise it may be too
-        # sparse
+        # seg in c, (z,) y, x
+        # At least 1% of the class voxels need to be selected, otherwise it may be too sparse
         min_percent_coverage = 0.01
         selected_dict = {}
 
         for class_name, class_value in self.dataset_yaml["labels"].items():
-            if any(True if s in class_name.lower() else False for s in ["unlabel", "ignore"]):
+            if any(
+                True if s in class_name.lower() else False
+                for s in ["unlabel", "ignore"]
+            ):
+                selected_dict[class_value] = "NoPoint"
                 continue
             all_locs = np.argwhere(seg[0] == class_value)
+
             if len(all_locs) != 0:
                 target_num_samples = min(num_samples, len(all_locs))
                 target_num_samples = max(
@@ -293,14 +293,28 @@ class Preprocessor(object):
                 ]
                 selected_dict[class_value] = selected
             else:
-                selected_dict[class_value] = "No_fg_point"
+                selected_dict[class_value] = "NoPoint"
 
         return selected_dict
+
+    def run_case_save(
+        self,
+        output_filename_truncated: str,
+        image_files: List[str],
+        seg_file: str,
+        preprocess_config: str,
+    ):
+        data, seg, properties = self.run_case(image_files, seg_file, preprocess_config)
+        properties["oversample"] = self._sample_locations_for_class(seg)
+
+        np.save(output_filename_truncated + ".npy", arr=data)
+        np.save(output_filename_truncated + "_seg.npy", arr=seg)
+        save_pickle(properties, output_filename_truncated + ".pkl")
 
     def run(
         self,
         preprocess_config,
-        num_processes: int = 16,
+        num_workers: int = 16,
     ):
         raw_data_folder = os.path.join("./Dataset", self.dataset_name)
         assert os.path.isdir(
@@ -324,9 +338,7 @@ class Preprocessor(object):
             % data_split_json
         )
         data_split_dict = open_json(data_split_json)
-        identifiers = (
-            data_split_dict["0"]["train"] + data_split_dict["0"]["val"]
-        )
+        identifiers = data_split_dict["0"]["train"] + data_split_dict["0"]["val"]
 
         files_ending = self.dataset_yaml["files_ending"]
 
@@ -378,6 +390,7 @@ class Preprocessor(object):
             if os.path.isdir(gt_segmentation_path):
                 shutil.rmtree(gt_segmentation_path, ignore_errors=True)
             os.makedirs(gt_segmentation_path, exist_ok=True)
+
             shutil.copytree(
                 os.path.join("./Dataset", self.dataset_name, "labels"),
                 gt_segmentation_path,
@@ -430,9 +443,8 @@ class Preprocessor(object):
                 dirs_exist_ok=True,
             )
 
-        # multiprocessing magic.
         r = []
-        with multiprocessing.get_context("spawn").Pool(num_processes) as p:
+        with multiprocessing.get_context("spawn").Pool(num_workers) as p:
             for outfile, infiles, segfiles in zip(
                 output_filenames_truncated, image_fnames, seg_fnames
             ):
@@ -444,8 +456,6 @@ class Preprocessor(object):
                     )
                 )
             remaining = list(range(len(output_filenames_truncated)))
-            # p is pretty nifti. If we kill workers they just respawn but don't do any work.
-            # So we need to store the original pool of workers.
             workers = [j for j in p._pool]
             with tqdm(
                 desc=None, total=len(output_filenames_truncated), disable=self.verbose

@@ -132,8 +132,6 @@ class NaturalImagePredictor(object):
     def get_networks(self, network_settings: Dict):
         if "need_features" in network_settings.keys():
             network_settings["need_features"] = False
-        if "weight_path" in network_settings.keys():
-            del network_settings["weight_path"]
 
         return build_network(network_settings)
 

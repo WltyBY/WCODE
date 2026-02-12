@@ -3,16 +3,22 @@ import torch
 import numpy as np
 
 from torch.utils.data import Dataset
+from typing import List, Tuple, Union
 
+from wcode.training.dataloader.Patchsampler import Patchsampler
 from wcode.utils.file_operations import open_json, open_yaml, open_pickle
-from wcode.utils.data_io import files_ending_for_2d_img, files_ending_for_sitk
+from wcode.utils.data_io import file_endings_for_2d_img, file_endings_for_sitk
 
 
-class BaseDataset(Dataset):
+class PatchDataset(Dataset):
     def __init__(
         self,
         dataset_name,
         preprocess_config,
+        sample_patch_size: List,
+        final_patch_size: List,
+        oversample_rate: Union[float, List[float], Tuple[float]],
+        probabilistic_oversampling: bool,
         split="train",
         fold="0",
         modality=None,
@@ -24,6 +30,7 @@ class BaseDataset(Dataset):
         self.transform = transform
         assert isinstance(self.modality, list)
 
+        # get the split of dataset
         split_json_path = os.path.join(
             "./Dataset_preprocessed", self.dataset_name, "dataset_split.json"
         )
@@ -33,6 +40,7 @@ class BaseDataset(Dataset):
             )
         self.split_json = open_json(split_json_path)
 
+        # get some meta info of dataset
         dataset_yaml_path = os.path.join(
             "./Dataset_preprocessed", self.dataset_name, "dataset.yaml"
         )
@@ -40,19 +48,22 @@ class BaseDataset(Dataset):
             raise Exception("dataset.yaml is needed when generating Dataset object.")
         self.dataset_yaml = open_yaml(dataset_yaml_path)
 
-        if self.dataset_yaml["files_ending"] in files_ending_for_sitk:
+        # determine the image reading method
+        if self.dataset_yaml["files_ending"] in file_endings_for_sitk:
             self.general_img_flag = False
-        elif self.dataset_yaml["files_ending"] in files_ending_for_2d_img:
+        elif self.dataset_yaml["files_ending"] in file_endings_for_2d_img:
             self.general_img_flag = True
         else:
             raise Exception("Files' ending NOT SUPPORT!!!")
 
+        # get the preprocessed dataset path
         self.preprocessed_dataset_folder_path = os.path.join(
             "./Dataset_preprocessed",
             self.dataset_name,
             "preprocessed_datas_" + preprocess_config,
         )
 
+        # get the ids of current split and fold
         if fold != "all":
             if self.split in ["train", "val"]:
                 self.ids = self.split_json[fold][self.split]
@@ -70,12 +81,23 @@ class BaseDataset(Dataset):
 
         self.ids.sort()
 
-        print("{} dataset has {} samples".format(split.upper(), len(self.ids)))
+        # print(
+        #     "{} dataset has {} samples.".format(split.upper(), len(self.ids))
+        # )
+
+        # initialize Patchsampler
+        self.Patchsampler = Patchsampler(
+            sample_patch_size=sample_patch_size,
+            final_patch_size=final_patch_size,
+            oversample_rate=oversample_rate,
+            probabilistic_oversampling=probabilistic_oversampling,
+        )
 
     def __len__(self):
         return len(self.ids)
 
     def __getitem__(self, idx):
+        # get image, label and property dict
         case = self.ids[idx]
         data = np.load(
             os.path.join(self.preprocessed_dataset_folder_path, case + ".npy")
@@ -87,11 +109,12 @@ class BaseDataset(Dataset):
         property_dict = open_pickle(
             os.path.join(self.preprocessed_dataset_folder_path, case + ".pkl")
         )
+        fg_locations = property_dict["oversample"]
 
         if self.general_img_flag:
             data_lst = []
+            count = 0
             for i in range(len(property_dict["shapes"])):
-                count = 0
                 n_channel = property_dict["shapes"][i][0]
                 if i in self.modality:
                     data_lst.append(
@@ -105,17 +128,16 @@ class BaseDataset(Dataset):
                 "label": data_dict["seg"],
             }
 
+        # sample a patch
+        sample["image"], sample["label"] = self.Patchsampler.sample_a_patch(
+            sample["image"], sample["label"], fg_locations
+        )
+
+        # apply data augmentation if available
         if self.transform is not None:
             sample["image"] = torch.from_numpy(sample["image"]).float()
             sample["label"] = torch.from_numpy(sample["label"]).to(torch.int16)
-            output_dict = {"image": [], "label": []}
-            for i in range(sample["image"].shape[0]):
-                sample_data = {"image": sample["image"][i], "label": sample["label"][i]}
-                sample_data = self.transform(**sample_data)
-                output_dict["image"].append(sample_data["image"])
-                output_dict["label"].append(sample_data["label"])
-            sample["image"] = torch.stack(output_dict["image"])
-            sample["label"] = torch.stack(output_dict["label"])
+            sample = self.transform(**sample)
 
         sample["idx"] = case
         sample["property"] = property_dict

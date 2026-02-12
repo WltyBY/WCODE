@@ -13,7 +13,7 @@ def get_tp_fp_fn_tn(net_output, gt, axes=None, mask=None, square=False):
     :param axes: can be (, ) = no summation
     :param mask: mask must be 1 for valid pixels and 0 for invalid pixels
     :param square: if True then fp, tp and fn will be squared before summation
-    :return:
+    :return: 
     """
     if axes is None:
         axes = tuple(range(2, len(net_output.size())))

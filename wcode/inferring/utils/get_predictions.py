@@ -55,16 +55,6 @@ def revert_cropping_on_probabilities(
     bbox: List[List[int]],
     original_shape: Union[List[int], Tuple[int, ...]],
 ):
-    """
-    ONLY USE THIS WITH PROBABILITIES, DO NOT USE LOGITS AND DO NOT USE FOR SEGMENTATION MAPS!!!
-
-    predicted_probabilities must be (c, x, y(, z))
-
-    Why do we do this here? Well if we pad probabilities we need to make sure that convert_logits_to_segmentation
-    correctly returns background in the padded areas. Also we want to ba able to look at the padded probabilities
-    and not have strange artifacts.
-    Only LabelManager knows how this needs to be done. So let's let him/her do it, ok?
-    """
     # revert cropping
     probs_reverted_cropping = (
         np.zeros(
@@ -77,7 +67,6 @@ def revert_cropping_on_probabilities(
             dtype=predicted_probabilities.dtype,
         )
     )
-
     slicer = bounding_box_to_slice(bbox)
     probs_reverted_cropping[tuple([slice(None)] + list(slicer))] = (
         predicted_probabilities
@@ -107,7 +96,8 @@ def convert_predicted_logits_to_segmentation_with_correct_shape(
             resample_ND_data_to_given_shape(
                 predicted_logits[i],
                 properties_dict["shape_after_cropping_and_before_resampling"],
-                is_seg=True,
+                current_spacing=properties_dict["target_spacing"],
+                is_seg=False,
             )[None]
         )
     predicted_logits = torch.from_numpy(np.vstack(predicted_logits_lst)).float()
@@ -209,6 +199,7 @@ def export_original_logits(
             resample_ND_data_to_given_shape(
                 predicted_logits[i],
                 properties_dict["shape_after_cropping_and_before_resampling"],
+                current_spacing=properties_dict["target_spacing"],
                 is_seg=False,
             )[None]
         )

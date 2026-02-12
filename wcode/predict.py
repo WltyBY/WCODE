@@ -6,11 +6,11 @@ from wcode.inferring.Evaluator import Evaluator
 from wcode.utils.file_operations import open_yaml
  
 parser = argparse.ArgumentParser()
-parser.add_argument("--dataset", type=str, default="SegRap2023", help="Name of dataset")
+parser.add_argument("--dataset", type=str, default="LNQ2023", help="Name of dataset")
 parser.add_argument(
     "--settiing_file",
     type=str,
-    default="SegRap2023.yaml",
+    default="LNQ2023_Ours.yaml",
     help="Name of setting files, or its absolute path",
 )
 parser.add_argument(
@@ -22,7 +22,7 @@ parser.add_argument(
 parser.add_argument(
     "-i",
     type=str,
-    default=None,
+    default="./Dataset/CTLymphNodes02/images",
     help="folder path of input images",
 )
 parser.add_argument(
@@ -34,17 +34,17 @@ parser.add_argument(
 parser.add_argument(
     "-o",
     type=str,
-    default=None,
+    default="./Logs/CTLymphNodes02/BS8/tversky_alpha_0.4_awce_beta_1.0_consis_weight_1.0_rampup_epoch_100_update_way_least_select_way_merge_num_prototype_3_memory_rate_0.999/fold_4/validation",
     help="folder path of save path",
 )
 parser.add_argument(
     "-m",
     type=str,
-    default=None,
+    default="./Logs/CTLymphNodes02/BS8/tversky_alpha_0.4_awce_beta_1.0_consis_weight_1.0_rampup_epoch_100_update_way_least_select_way_merge_num_prototype_3_memory_rate_0.999/fold_4/checkpoint_final.pth",
     help="saving path of using model",
 )
-parser.add_argument("-f", type=str, default=None, help="fold")
-parser.add_argument("-s", type=str, default=None, help="split of data, can be None")
+parser.add_argument("-f", type=str, default="4", help="fold")
+parser.add_argument("-s", type=str, default="val", help="split of data, can be None")
 parser.add_argument(
     "--data_dim",
     type=str,

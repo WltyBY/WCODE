@@ -67,7 +67,12 @@ class Tversky_and_CE_loss(nn.Module):
 
 class Hinton_distillaton_loss(nn.Module):
     """
-    Paper: Distilling the knowledge in a neural network (https://doi.org/10.48550/arXiv.1503.02531)
+    @article{hinton2015distilling,
+        title={Distilling the knowledge in a neural network},
+        author={Hinton, Geoffrey and Vinyals, Oriol and Dean, Jeff},
+        journal={arXiv preprint arXiv:1503.02531},
+        year={2015}
+    }
     """
 
     def __init__(
