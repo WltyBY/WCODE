@@ -2,7 +2,7 @@ import torch.nn.functional as F
 
 from torch import nn
 
-from wcode.net.CNN.modules.baseblock_CNN import module_generate
+from wcode.net.CNN.modules.baseblocks import module_generate
 from wcode.net.activate_function import ACTIVATE_LAYER
 
 

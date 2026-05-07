@@ -1,0 +1,55 @@
+ViTCLS2D:
+  label: ViTCLS
+  image_size: [224, 224]
+  patch_size: 16
+  in_channels: 3
+  out_channels: 1000
+  embed_dim: 768
+  depth: 12
+  num_heads: 12
+  mlp_ratio: 4.0
+  dropout_rate: 0.0
+  PE_dropout_rate: 0.1
+
+ViTCLS3D:
+  label: ViTCLS
+  image_size: [64, 128, 224]
+  patch_size: 16
+  in_channels: 3
+  out_channels: 1000
+  embed_dim: 768
+  depth: 12
+  num_heads: 12
+  mlp_ratio: 4.0
+  dropout_rate: 0.0
+  PE_dropout_rate: 0.1
+
+ViTSEG2D:
+  label: ViTSEG
+  image_size: [224, 224]
+  patch_size: 16
+  in_channels: 3
+  out_channels: 2
+  embed_dim: 768
+  depth: 6
+  num_heads: 12
+  mlp_ratio: 4.0
+  dropout_rate: 0.0
+  PE_dropout_rate: 0.1
+  deep_supervision: True
+  need_features: True
+
+ViTSEG3D:
+  label: ViTSEG
+  image_size: [64, 128, 224]
+  patch_size: 16
+  in_channels: 3
+  out_channels: 2
+  embed_dim: 768
+  depth: 6
+  num_heads: 12
+  mlp_ratio: 4.0
+  dropout_rate: 0.0
+  PE_dropout_rate: 0.1
+  deep_supervision: True
+  need_features: True

@@ -9,6 +9,7 @@ import torch.distributed as dist
 from datetime import datetime
 from tqdm import tqdm
 from time import time, sleep
+from torch import nn
 from torch.amp import autocast
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler
@@ -44,7 +45,7 @@ from wcode.training.loss.deep_supervision import DeepSupervisionWeightedSummator
 from wcode.training.logs_writer.logger_for_segmentation import logger
 from wcode.training.dataloader.Collater import BasedCollater
 from wcode.training.dataloader.InfiniteSampler import InfiniteSampler
-from wcode.training.learning_rate.PolyLRScheduler import PolyLRScheduler
+from wcode.training.learning_rate.PolyLR import PolyLRScheduler
 from wcode.training.metrics import get_tp_fp_fn_tn
 from wcode.utils.file_operations import open_yaml, open_json, copy_file_to_dstFolder
 from wcode.utils.others import empty_cache, dummy_context
@@ -60,31 +61,32 @@ class PatchBasedTrainer(object):
     def __init__(
         self,
         training_args,
-        verbose: bool = False,
+        verbose: bool = True,
     ):
-        self.training_args = training_args
-
         self.verbose = verbose
-        config_file_path = os.path.join("./Configs", self.training_args.setting)
+        config_file_path = os.path.join("./Configs", training_args.setting)
         self.config_dict = open_yaml(config_file_path)
 
-        self.get_train_settings()
+        self.get_train_settings(training_args)
         self.device = self.get_device()
-        
+
         # Task-general params
-        task_general_names = "BS_{}_GPU_NUM_{}_SEED_{}_PRETRAINED_{}".format(
-            self.batch_size, self.world_size, self.random_seed, self.pretrained_weight is not None
+        task_general_names = "BS_{}_GPU_NUM_{}_EPOCH_{}_SEED_{}_PRETRAINED_{}".format(
+            self.batch_size,
+            self.world_size,
+            self.num_epoch,
+            self.random_seed,
+            self.pretrained_weight is not None,
         )
 
         # hyperparameter
-        self.w_ce = self.training_args.w_ce
-        self.w_dice = self.training_args.w_dice
-        self.w_class = self.training_args.w_class
+        self.w_ce = training_args.w_ce
+        self.w_dice = training_args.w_dice
+        self.w_class = training_args.w_class
         hyperparams_name = "w_ce_{}_w_dice_{}_w_class_{}".format(
             self.w_ce, self.w_dice, self.w_class
         )
 
-        self.fold = self.training_args.fold
         self.allow_mirroring_axes_during_inference = None
 
         self.was_initialized = False
@@ -114,7 +116,7 @@ class PatchBasedTrainer(object):
         self.log_file = os.path.join(self.logs_output_folder, time_ + ".txt")
         with open(self.log_file, "w"):
             pass
-        
+
         self.print_to_log_file(
             f"Using device: {self.device} | DDP: {self.is_ddp} | rank {self.rank}/{self.world_size}"
         )
@@ -138,10 +140,7 @@ class PatchBasedTrainer(object):
                 "Training logs will be saved in:", self.logs_output_folder
             )
 
-        if self.is_ddp:
-            dist.barrier(device_ids=[self.device.index])
-
-        self.logger = logger()
+        self.logger = self.get_logger()
 
         self.current_epoch = 0
 
@@ -153,29 +152,31 @@ class PatchBasedTrainer(object):
 
         if self.continue_train:
             checkpoint = os.path.join(self.logs_output_folder, "checkpoint_latest.pth")
+            self.sync_processes()
             if not os.path.isfile(checkpoint):
                 raise FileNotFoundError(
                     f"Continue training was requested but checkpoint not found: {checkpoint}"
                 )
             self.load_checkpoint(checkpoint)
+        self.sync_processes()
 
-            if self.is_ddp:
-                dist.barrier(device_ids=[self.device.index])
-
-    def get_train_settings(self):
+    def get_train_settings(self, training_args):
         # settings in training args
-        self.dataset_name = self.training_args.dataset
-        self.method_name = self.training_args.method_name
-        self.batch_size = self.training_args.batch_size
-        self.num_workers = self.training_args.num_workers
-        self.random_seed = self.training_args.seed
-        self.continue_train = self.training_args.continue_train
-        self.pretrained_weight = self.training_args.pretrained_weight
-        self.args_gpu = self.training_args.gpu
+        self.dataset_name = training_args.dataset
+        self.method_name = training_args.method_name
+        self.fold = training_args.fold
+        self.num_epoch = training_args.num_epoch
+        self.warmup_epoch = training_args.warmup_epoch
+        self.batch_size = training_args.batch_size
+        self.args_gpu = training_args.gpu
+        self.continue_train = training_args.continue_train
+        self.pretrained_weight = training_args.pretrained_weight
+        self.num_workers = training_args.num_workers
+        self.random_seed = training_args.seed
+        self.deterministic = training_args.no_deterministic
 
         # settings in config file
         self.modality = self.config_dict["Training_settings"]["modality"]
-        self.num_epochs = self.config_dict["Training_settings"]["epoch"]
         self.tr_iterations_per_epoch = self.config_dict["Training_settings"][
             "tr_iterations_per_epoch"
         ]
@@ -185,7 +186,6 @@ class PatchBasedTrainer(object):
         self.patch_size = self.config_dict["Training_settings"]["patch_size"]
         self.base_lr = self.config_dict["Training_settings"]["base_lr"]
         self.weight_decay = self.config_dict["Training_settings"]["weight_decay"]
-        self.deterministic = self.config_dict["Training_settings"]["deterministic"]
         self.oversample_rate = self.config_dict["Training_settings"]["oversample_rate"]
         self.probabilistic_oversampling = self.config_dict["Training_settings"][
             "probabilistic_oversampling"
@@ -200,26 +200,23 @@ class PatchBasedTrainer(object):
             self.modality = [
                 int(i) for i in range(len(self.dataset_yaml["channel_names"]))
             ]
-        
+
         # decide preprocess config
-        ks = self.config_dict["Network"]["kernel_size"][0]
-        if len(ks) == 3:
-            self.preprocess_config = "3d"
-        elif len(ks) == 2:
-            self.preprocess_config = "2d"
-        else:
-            raise ValueError("Unsupported kernel size dimension")
+        if "kernel_size" in self.config_dict["Network"]:
+            # For CNN models, we use kernel_size to determine the dimension of the model and the preprocess config.
+            l_ks = len(self.config_dict["Network"]["kernel_size"][0])
+            self.pool_kernel_size = self.config_dict["Network"]["pool_kernel_size"]
+        # elif "patch_size" in self.config_dict["Network"]:
+        #     # For ViT models, we use patch_size in PatchEmbedding to determine these things.
+        #     l_ks = len(self.config_dict["Network"]["patch_size"])
+        #     self.pool_kernel_size = [
+        #         [1 for _ in range(l_ks)]
+        #         for _ in range(self.config_dict["Network"]["depth"])
+        #     ]
+        assert l_ks in (2, 3), "Unsupported patch size dimension: {}".format(l_ks)
+        self.preprocess_config = "{}d".format(l_ks)
 
     def setting_check(self):
-        if len(self.config_dict["Network"]["pool_kernel_size"]) == len(
-            self.config_dict["Network"]["kernel_size"]
-        ):
-            raise ValueError(
-                "The list of convolutional kernel sizes should be 1 smaller in length than the list of pooling kernels. "
-                "Because the output with the lowest resolution does not require a pooling layer."
-            )
-        self.pool_kernel_size = self.config_dict["Network"]["pool_kernel_size"]
-
         if (
             self.config_dict["Network"].__contains__("activate")
             and self.config_dict["Network"]["activate"].lower() == "prelu"
@@ -244,7 +241,7 @@ class PatchBasedTrainer(object):
         if self.args_gpu:
             os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, self.args_gpu))
 
-        use_cuda = torch.cuda.is_available() and self.args_gpu != []
+        use_cuda = torch.cuda.is_available() and (self.args_gpu != [])
 
         ddp = int(os.environ.get("WORLD_SIZE", 1)) > 1 and use_cuda
 
@@ -264,10 +261,15 @@ class PatchBasedTrainer(object):
             device = torch.device("cuda:0" if use_cuda else "cpu")
 
         self.is_ddp = ddp
+        self.sync_processes()
 
-        if self.is_ddp:
-            dist.barrier(device_ids=[device.index])
         return device
+
+    def get_logger(self):
+        if self.is_main_process():
+            return logger()
+        else:
+            return None
 
     def initialize(self):
         if not self.was_initialized:
@@ -276,7 +278,6 @@ class PatchBasedTrainer(object):
 
             # build network
             self.network = self.get_networks(self.config_dict["Network"])
-
             if self.pretrained_weight is not None:
                 if self.is_main_process():
                     self.print_to_log_file(
@@ -287,6 +288,7 @@ class PatchBasedTrainer(object):
             self.network.to(self.device)
 
             if self.is_ddp:
+                self.network = self.convert_bn2syncbn(self.network)
                 self.network = torch.nn.parallel.DistributedDataParallel(
                     self.network,
                     device_ids=[self.device.index],
@@ -350,6 +352,10 @@ class PatchBasedTrainer(object):
 
     def is_main_process(self):
         return (not self.is_ddp) or self.rank == 0
+
+    def sync_processes(self):
+        if self.is_ddp:
+            dist.barrier(device_ids=[self.device.index])
 
     def _build_deep_supervision_loss_object(self, loss):
         deep_supervision_scales = self._get_deep_supervision_scales()
@@ -423,18 +429,17 @@ class PatchBasedTrainer(object):
             print(*args)
 
     def get_networks(self, network_settings):
-        model = build_network(network_settings)
-        if not self.is_ddp:
-            return model
+        return build_network(network_settings)
 
+    def convert_bn2syncbn(self, model):
         has_bn = False
         for m in model.modules():
             if isinstance(
                 m,
                 (
-                    torch.nn.BatchNorm1d,
-                    torch.nn.BatchNorm2d,
-                    torch.nn.BatchNorm3d,
+                    nn.BatchNorm1d,
+                    nn.BatchNorm2d,
+                    nn.BatchNorm3d,
                 ),
             ):
                 has_bn = True
@@ -445,7 +450,7 @@ class PatchBasedTrainer(object):
                 self.print_to_log_file(
                     "[DDP] BatchNorm detected → converting to SyncBatchNorm"
                 )
-            model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+            model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
         else:
             if self.is_main_process():
                 self.print_to_log_file(
@@ -462,7 +467,11 @@ class PatchBasedTrainer(object):
             momentum=0.9,
             nesterov=True,
         )
-        lr_scheduler = PolyLRScheduler(optimizer=optimizer, max_steps=self.num_epochs)
+        lr_scheduler = PolyLRScheduler(
+            optimizer=optimizer,
+            max_steps=self.num_epoch,
+            warmup_steps=self.warmup_epoch,
+        )
         return optimizer, lr_scheduler
 
     def configure_rotation_dummyDA_mirroring_and_inital_patch_size(self):
@@ -730,7 +739,7 @@ class PatchBasedTrainer(object):
         # throughout the entire training process cannot cover all the images in the val set.
         val_sampler = self.build_sampler(val_dataset)
 
-        this_num_workers = self.num_workers // self.world_size
+        this_num_workers = max(1, self.num_workers // self.world_size)
 
         train_loader = DataLoader(
             train_dataset,
@@ -743,7 +752,7 @@ class PatchBasedTrainer(object):
             persistent_workers=True,
             worker_init_fn=self.worker_init_fn,
             drop_last=True,
-            prefetch_factor=3,
+            prefetch_factor=max(1, 3 - (self.batch_size // 64)),
         )
 
         val_loader = DataLoader(
@@ -756,7 +765,7 @@ class PatchBasedTrainer(object):
             pin_memory=self.device.type == "cuda",
             persistent_workers=True,
             drop_last=True,
-            prefetch_factor=2,
+            prefetch_factor=max(1, 2 - (self.batch_size // 64)),
         )
 
         return train_loader, val_loader
@@ -765,7 +774,7 @@ class PatchBasedTrainer(object):
         try:
             self.train_start()
 
-            for epoch in range(self.current_epoch, self.num_epochs):
+            for epoch in range(self.current_epoch, self.num_epoch):
                 self.epoch_start(epoch)
 
                 # ---------- train ----------
@@ -773,12 +782,10 @@ class PatchBasedTrainer(object):
                 train_outputs = []
                 for _ in tqdm(
                     range(self.tr_iterations_per_epoch),
-                    disable=(self.rank != 0) or self.verbose,
+                    disable=(self.rank != 0) or not self.verbose,
                 ):
                     batch = next(self.train_iter)
                     train_outputs.append(self.train_step(batch))
-                if self.is_ddp:
-                    dist.barrier(device_ids=[self.device.index])
                 self.train_epoch_end(train_outputs, epoch)
 
                 # ---------- validate ----------
@@ -787,12 +794,10 @@ class PatchBasedTrainer(object):
                     val_outputs = []
                     for _ in tqdm(
                         range(self.val_iterations_per_epoch),
-                        disable=(self.rank != 0) or self.verbose,
+                        disable=(self.rank != 0) or not self.verbose,
                     ):
                         batch = next(self.val_iter)
                         val_outputs.append(self.validation_step(batch))
-                    if self.is_ddp:
-                        dist.barrier(device_ids=[self.device.index])
                     self.validation_epoch_end(val_outputs, epoch)
 
                 self.epoch_end(epoch)
@@ -818,15 +823,12 @@ class PatchBasedTrainer(object):
                 self.print_to_log_file(
                     f"{final_ckpt} exists – training already finished."
                 )
-            self.current_epoch = self.num_epochs  # labeled as finished
+            self.current_epoch = self.num_epoch  # labeled as finished
             self.already_finish_training = True
         else:
             self.already_finish_training = False
 
     def train_end(self):
-        if self.is_ddp:
-            dist.barrier(device_ids=[self.device.index])
-
         # kill dataloader workers
         if hasattr(self, "dataloader_train"):
             if hasattr(self, "train_iter"):
@@ -869,58 +871,59 @@ class PatchBasedTrainer(object):
         if self.is_ddp:
             for loader in [self.dataloader_train, self.dataloader_val]:
                 sampler = loader.sampler
-                sampler.set_epoch(epoch)
+                if hasattr(sampler, "set_epoch"):
+                    sampler.set_epoch(epoch)
 
         # only rank 0 or the main process
         if self.is_main_process():
             self.logger.log("epoch_start_timestamps", time(), epoch)
 
     def epoch_end(self, epoch):
+        self.sync_processes()
         # only rank 0 should do logging / saving / printing
-        if not self.is_main_process():
-            self.current_epoch = epoch + 1
-            return
+        if self.is_main_process():
 
-        self.logger.log("epoch_end_timestamps", time(), epoch)
+            self.logger.log("epoch_end_timestamps", time(), epoch)
 
-        self.print_to_log_file(
-            "train_loss", np.round(self.logger.logging["train_losses"][-1], decimals=4)
-        )
-        self.print_to_log_file(
-            "val_loss", np.round(self.logger.logging["val_losses"][-1], decimals=4)
-        )
-        self.print_to_log_file(
-            "Pseudo dice",
-            [
-                np.round(i, decimals=4)
-                for i in self.logger.logging["dice_per_class"][-1]
-            ],
-        )
-        self.print_to_log_file(
-            f"Epoch time: {np.round(self.logger.logging['epoch_end_timestamps'][-1] - self.logger.logging['epoch_start_timestamps'][-1], decimals=2)} s"
-        )
-
-        # handling periodic checkpointing
-        if (epoch + 1) % self.save_every == 0 and epoch != (self.num_epochs - 1):
-            self.save_checkpoint(
-                os.path.join(self.logs_output_folder, "checkpoint_latest.pth")
-            )
-
-        # handle 'best' checkpointing. ema_fg_dice is computed by the logger and can be accessed like this
-        if (
-            self._best_ema is None
-            or self.logger.logging["ema_fg_dice"][-1] > self._best_ema
-        ):
-            self._best_ema = self.logger.logging["ema_fg_dice"][-1]
             self.print_to_log_file(
-                f"Yayy! New best EMA pseudo Dice: {np.round(self._best_ema, decimals=4)}"
+                "train_loss",
+                np.round(self.logger.logging["train_losses"][-1], decimals=4),
             )
-            self.save_checkpoint(
-                os.path.join(self.logs_output_folder, "checkpoint_best.pth")
+            self.print_to_log_file(
+                "val_loss", np.round(self.logger.logging["val_losses"][-1], decimals=4)
+            )
+            self.print_to_log_file(
+                "Pseudo dice",
+                [
+                    np.round(i, decimals=4)
+                    for i in self.logger.logging["dice_per_class"][-1]
+                ],
+            )
+            self.print_to_log_file(
+                f"Epoch time: {np.round(self.logger.logging['epoch_end_timestamps'][-1] - self.logger.logging['epoch_start_timestamps'][-1], decimals=2)} s"
             )
 
-        self.logger.plot_progress_png(self.logs_output_folder)
+            # handling periodic checkpointing
+            if (epoch + 1) % self.save_every == 0 and epoch != (self.num_epoch - 1):
+                self.save_checkpoint(
+                    os.path.join(self.logs_output_folder, "checkpoint_latest.pth")
+                )
 
+            # handle 'best' checkpointing. ema_fg_dice is computed by the logger and can be accessed like this
+            if (
+                self._best_ema is None
+                or self.logger.logging["ema_fg_dice"][-1] > self._best_ema
+            ):
+                self._best_ema = self.logger.logging["ema_fg_dice"][-1]
+                self.print_to_log_file(
+                    f"Yayy! New best EMA pseudo Dice: {np.round(self._best_ema, decimals=4)}"
+                )
+                self.save_checkpoint(
+                    os.path.join(self.logs_output_folder, "checkpoint_best.pth")
+                )
+
+            self.logger.plot_progress_png(self.logs_output_folder)
+        self.sync_processes()
         self.current_epoch = epoch + 1
 
     def train_epoch_start(self, epoch):
@@ -975,6 +978,8 @@ class PatchBasedTrainer(object):
         return {"loss": l.detach().cpu().numpy()}
 
     def train_epoch_end(self, train_outputs, epoch):
+        self.sync_processes()
+
         outputs = collate_outputs(train_outputs)
 
         local_loss_sum = float(np.sum(outputs["loss"]))
@@ -1061,6 +1066,8 @@ class PatchBasedTrainer(object):
         }
 
     def validation_epoch_end(self, val_outputs, epoch):
+        self.sync_processes()
+
         outputs_collated = collate_outputs(val_outputs)
 
         # outputs_collated["tp_hard"]: (num_batch, num_cls - 1), tp: (num_cls - 1,)
@@ -1102,7 +1109,7 @@ class PatchBasedTrainer(object):
 
     def save_checkpoint(self, filename: str) -> None:
         # In DDP mode, only rank-0 saves the checkpoint to avoid concurrent writes
-        if self.is_ddp and dist.get_rank() != 0:
+        if not self.is_main_process():
             return
 
         # Skip saving if checkpointing is disabled
@@ -1128,21 +1135,36 @@ class PatchBasedTrainer(object):
             "logging": self.logger.get_checkpoint(),
             "_best_ema": self._best_ema,
             # the correct epoch_id (next epoch) loaded for continual training.
-            "current_epoch": self.current_epoch + 1,
+            "current_epoch": self.current_epoch,  # the epoch of the weight from, epoch id begins with 0
             "LRScheduler_state": self.lr_scheduler.state_dict(),  # state from this epoch
         }
         torch.save(checkpoint, filename)
 
     def load_checkpoint(self, filename_or_checkpoint):
         """Load checkpoint and automatically handle 'module.' prefix for DDP <-> single-GPU switching."""
-        self.print_to_log_file("Loading checkpoint...")
+        if self.is_main_process():
+            self.print_to_log_file("Loading checkpoint...")
+
         if not self.was_initialized:
             self.initialize()
 
         if isinstance(filename_or_checkpoint, str):
-            checkpoint = torch.load(
-                filename_or_checkpoint, map_location=self.device, weights_only=False
-            )
+            if self.is_ddp:
+                checkpoint_holder = [None]
+                if self.is_main_process():
+                    checkpoint_holder[0] = torch.load(
+                        filename_or_checkpoint,
+                        map_location=self.device,
+                        weights_only=False,
+                    )
+                dist.broadcast_object_list(checkpoint_holder, src=0)
+                checkpoint = checkpoint_holder[0]
+            else:
+                checkpoint = torch.load(
+                    filename_or_checkpoint, map_location=self.device, weights_only=False
+                )
+        else:
+            checkpoint = filename_or_checkpoint
 
         # Remove 'module.' prefix if present (compatibility with DDP weights)
         new_state_dict = {}
@@ -1150,10 +1172,6 @@ class PatchBasedTrainer(object):
             if k.startswith("module."):
                 k = k[7:]
             new_state_dict[k] = v
-
-        self.current_epoch = checkpoint["current_epoch"]
-        self.logger.load_checkpoint(checkpoint["logging"])
-        self._best_ema = checkpoint["_best_ema"]
 
         # Load weights into the bare model (unwrap DDP or OptimizedModule)
         target_mod = self.network
@@ -1167,20 +1185,18 @@ class PatchBasedTrainer(object):
             )
         target_mod.load_state_dict(new_state_dict)
 
+        self.current_epoch = checkpoint["current_epoch"] + 1
+        self.logger.load_checkpoint(checkpoint["logging"])
+        self._best_ema = checkpoint["_best_ema"]
+
         self.optimizer.load_state_dict(checkpoint["optimizer_state"])
         if self.grad_scaler is not None:
             if checkpoint["grad_scaler_state"] is not None:
                 self.grad_scaler.load_state_dict(checkpoint["grad_scaler_state"])
         self.lr_scheduler.load_state_dict(checkpoint["LRScheduler_state"])
 
-        # Although 99.9999% the same, but check again for some unknown things.
-        if self.lr_scheduler.last_epoch != self.current_epoch - 1:
-            warnings.warn(
-                f"[Warning] Expected last_epoch == current_epoch - 1, "
-                f"but got last_epoch={self.lr_scheduler.last_epoch}, "
-                f"current_epoch={self.current_epoch}",
-                UserWarning,
-            )
+        if self.is_main_process():
+            self.print_to_log_file(f"Resumed training from epoch {self.current_epoch}")
 
     def perform_actual_validation(self, save_probabilities: bool = False):
         if not self.is_main_process():
@@ -1297,7 +1313,6 @@ class PatchBasedTrainer(object):
         # --------------------
         # Run prediction
         # --------------------
-        start = time()
         if self.dataset_yaml["files_ending"] in file_endings_for_sitk:
             predictor = PatchBasedPredictor(
                 self.config_dict, allow_tqdm=True, verbose=False

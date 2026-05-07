@@ -21,34 +21,32 @@ class PatchBased2DSliceTrainer(PatchBasedTrainer):
     def __init__(
         self,
         training_args,
-        verbose: bool = False,
+        verbose: bool = True,
     ):
-        self.training_args = training_args
-
         self.verbose = verbose
-        config_file_path = os.path.join("./Configs", self.training_args.setting)
+        config_file_path = os.path.join("./Configs", training_args.setting)
         self.config_dict = open_yaml(config_file_path)
 
-        self.get_train_settings()
+        self.get_train_settings(training_args)
         self.device = self.get_device()
 
         # Task-general params
-        task_general_names = "BS_{}_GPU_NUM_{}_SEED_{}_PRETRAINED_{}".format(
+        task_general_names = "BS_{}_GPU_NUM_{}_EPOCH_{}_SEED_{}_PRETRAINED_{}".format(
             self.batch_size,
             self.world_size,
+            self.num_epoch,
             self.random_seed,
             self.pretrained_weight is not None,
         )
 
         # hyperparameter
-        self.w_ce = self.training_args.w_ce
-        self.w_dice = self.training_args.w_dice
-        self.w_class = self.training_args.w_class
+        self.w_ce = training_args.w_ce
+        self.w_dice = training_args.w_dice
+        self.w_class = training_args.w_class
         hyperparams_name = "w_ce_{}_w_dice_{}_w_class_{}".format(
             self.w_ce, self.w_dice, self.w_class
         )
 
-        self.fold = self.training_args.fold
         self.allow_mirroring_axes_during_inference = None
 
         self.was_initialized = False
@@ -102,10 +100,7 @@ class PatchBased2DSliceTrainer(PatchBasedTrainer):
                 "Training logs will be saved in:", self.logs_output_folder
             )
 
-        if self.is_ddp:
-            dist.barrier(device_ids=[self.device.index])
-
-        self.logger = logger()
+        self.logger = self.get_logger()
 
         self.current_epoch = 0
 
@@ -117,14 +112,13 @@ class PatchBased2DSliceTrainer(PatchBasedTrainer):
 
         if self.continue_train:
             checkpoint = os.path.join(self.logs_output_folder, "checkpoint_latest.pth")
+            self.sync_processes()
             if not os.path.isfile(checkpoint):
                 raise FileNotFoundError(
                     f"Continue training was requested but checkpoint not found: {checkpoint}"
                 )
             self.load_checkpoint(checkpoint)
-
-            if self.is_ddp:
-                dist.barrier(device_ids=[self.device.index])
+        self.sync_processes()
 
     def configure_rotation_dummyDA_mirroring_and_inital_patch_size(self):
         patch_size = self.patch_size
